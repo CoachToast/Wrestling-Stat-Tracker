@@ -1,0 +1,1014 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
+  <title>MatTrack - Wrestling Stats & Mat-Side Scoring</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- React and ReactDOM CDN -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <!-- Babel Standalone for in-browser JSX parsing -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <style>
+    button, input, select {
+      touch-action: manipulation;
+    }
+    ::-webkit-scrollbar {
+      height: 6px;
+      width: 6px;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #334155;
+      border-radius: 4px;
+    }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 font-sans antialiased select-none min-h-screen">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+
+    // Audio Synthesizer for Period Buzzer
+    const playBuzzer = () => {
+      try {
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = "sawtooth";
+        osc.frequency.setValueAtTime(150, audioCtx.currentTime);
+        osc.frequency.linearRampToValueAtTime(120, audioCtx.currentTime + 0.6);
+        gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.6);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + 0.6);
+      } catch (e) {
+        console.log("Audio waiting for user gesture");
+      }
+    };
+
+    const INITIAL_ROSTER = [
+      { id: "w1", name: "Marcus Vance", weight: "138", grade: "Sr" },
+      { id: "w2", name: "Sam Cole", weight: "144", grade: "Jr" },
+      { id: "w3", name: "David Ruiz", weight: "157", grade: "So" },
+      { id: "w4", name: "Tyler King", weight: "165", grade: "Sr" },
+      { id: "w5", name: "Jaden Brooks", weight: "175", grade: "Fr" }
+    ];
+
+    const INITIAL_MATCHES = [
+      {
+        id: "m1",
+        eventType: "dual",
+        eventName: "vs Oakridge High",
+        homeWrestler: "Marcus Vance",
+        opponentName: "J. Miller (Oakridge)",
+        weightClass: "138",
+        homeScore: 9,
+        awayScore: 2,
+        winner: "home",
+        winType: "Major Decision",
+        dualPointsAwarded: 4,
+        tourneyPointsAwarded: 0,
+        takedowns: 3,
+        escapes: 0,
+        reversals: 0,
+        nearfalls: 1,
+        date: "2026-01-14"
+      }
+    ];
+
+    function App() {
+      const [view, setView] = useState("scorer");
+      const [roster, setRoster] = useState(() => {
+        const saved = localStorage.getItem("mattrack_roster");
+        return saved ? JSON.parse(saved) : INITIAL_ROSTER;
+      });
+      const [matches, setMatches] = useState(() => {
+        const saved = localStorage.getItem("mattrack_matches");
+        return saved ? JSON.parse(saved) : INITIAL_MATCHES;
+      });
+
+      useEffect(() => {
+        localStorage.setItem("mattrack_roster", JSON.stringify(roster));
+      }, [roster]);
+
+      useEffect(() => {
+        localStorage.setItem("mattrack_matches", JSON.stringify(matches));
+      }, [matches]);
+
+      const handleSaveMatch = (newMatch) => {
+        setMatches([newMatch, ...matches]);
+        setView(newMatch.eventType === "dual" ? "dual" : "tournament");
+      };
+
+      return (
+        <div className="flex flex-col h-screen overflow-hidden bg-slate-950 text-slate-100">
+          {/* Top Nav */}
+          <nav className="flex items-center justify-between px-5 py-3 bg-slate-900 border-b border-slate-800 shrink-0">
+            <div className="flex items-center gap-2">
+              <div className="bg-amber-500 text-black p-1.5 rounded-lg font-black tracking-tighter text-lg">
+                MT
+              </div>
+              <span className="font-extrabold text-lg tracking-wider text-white hidden sm:inline">
+                MAT<span className="text-amber-400">TRACK</span>
+              </span>
+            </div>
+
+            <div className="flex bg-slate-800/90 rounded-xl p-1 gap-1 border border-slate-700/50">
+              <button
+                onClick={() => setView("scorer")}
+                className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition ${
+                  view === "scorer" ? "bg-amber-500 text-slate-950" : "text-slate-300 hover:text-white"
+                }`}
+              >
+                Live Scorer
+              </button>
+              <button
+                onClick={() => setView("dual")}
+                className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition ${
+                  view === "dual" ? "bg-blue-600 text-white" : "text-slate-300 hover:text-white"
+                }`}
+              >
+                Dual Meets
+              </button>
+              <button
+                onClick={() => setView("tournament")}
+                className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition ${
+                  view === "tournament" ? "bg-purple-600 text-white" : "text-slate-300 hover:text-white"
+                }`}
+              >
+                Tournaments
+              </button>
+              <button
+                onClick={() => setView("roster")}
+                className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition ${
+                  view === "roster" ? "bg-emerald-600 text-white" : "text-slate-300 hover:text-white"
+                }`}
+              >
+                Roster & Stats
+              </button>
+            </div>
+          </nav>
+
+          <main className="flex-1 overflow-auto min-h-0">
+            {view === "scorer" && (
+              <LiveScorer roster={roster} onSaveMatch={handleSaveMatch} />
+            )}
+            {view === "dual" && (
+              <DualMeetsView matches={matches.filter(m => m.eventType === "dual")} />
+            )}
+            {view === "tournament" && (
+              <TournamentsView matches={matches.filter(m => m.eventType === "tournament")} />
+            )}
+            {view === "roster" && (
+              <RosterView roster={roster} setRoster={setRoster} matches={matches} />
+            )}
+          </main>
+        </div>
+      );
+    }
+
+    // =========================================================================
+    // COMPONENT: LIVE SCORER (WITH EQUAL SIZED NUMBERS & LABELS)
+    // =========================================================================
+    function LiveScorer({ roster, onSaveMatch }) {
+      const [eventType, setEventType] = useState("dual");
+      const [eventName, setEventName] = useState("Dual vs Opponent");
+      const [weightClass, setWeightClass] = useState("157");
+      const [homeWrestler, setHomeWrestler] = useState(roster[0]?.name || "Home Wrestler");
+      const [awayWrestler, setAwayWrestler] = useState("Opponent");
+
+      // Clock
+      const PERIOD_LEN = 120;
+      const OT_LEN = 60;
+      const [period, setPeriod] = useState(1);
+      const [secondsLeft, setSecondsLeft] = useState(PERIOD_LEN);
+      const [isRunning, setIsRunning] = useState(false);
+
+      // Score
+      const [homeScore, setHomeScore] = useState(0);
+      const [awayScore, setAwayScore] = useState(0);
+      const [history, setHistory] = useState([]);
+      const [isFinished, setIsFinished] = useState(false);
+      const [finishType, setFinishType] = useState(null);
+
+      useEffect(() => {
+        let interval = null;
+        if (isRunning && secondsLeft > 0) {
+          interval = setInterval(() => setSecondsLeft(prev => prev - 1), 1000);
+        } else if (secondsLeft === 0 && isRunning) {
+          setIsRunning(false);
+          playBuzzer();
+          advancePeriod();
+        }
+        return () => clearInterval(interval);
+      }, [isRunning, secondsLeft]);
+
+      useEffect(() => {
+        if (Math.abs(homeScore - awayScore) >= 15 && !isFinished) {
+          setIsRunning(false);
+          finishMatch(homeScore > awayScore ? "home" : "away", "Tech Fall");
+        }
+      }, [homeScore, awayScore]);
+
+      const advancePeriod = () => {
+        if (period === 1) {
+          setPeriod(2);
+          setSecondsLeft(PERIOD_LEN);
+        } else if (period === 2) {
+          setPeriod(3);
+          setSecondsLeft(PERIOD_LEN);
+        } else if (period === 3) {
+          if (homeScore === awayScore) {
+            setPeriod("OT");
+            setSecondsLeft(OT_LEN);
+          } else {
+            const diff = Math.abs(homeScore - awayScore);
+            finishMatch(homeScore > awayScore ? "home" : "away", diff >= 8 ? "Major Decision" : "Decision");
+          }
+        } else if (period === "OT") {
+          const winner = homeScore >= awayScore ? "home" : "away";
+          finishMatch(winner, "Decision (OT)");
+        }
+      };
+
+      const finishMatch = (winnerSide, type) => {
+        setIsRunning(false);
+        setIsFinished(true);
+        setFinishType(type);
+      };
+
+      const addScore = (side, code, points) => {
+        if (isFinished) return;
+        const entry = {
+          id: Math.random().toString(36).substring(2, 7),
+          side,
+          code,
+          points,
+          period,
+          seconds: secondsLeft
+        };
+        if (side === "home") setHomeScore(s => s + points);
+        if (side === "away") setAwayScore(s => s + points);
+        setHistory([entry, ...history]);
+      };
+
+      const undo = () => {
+        if (history.length === 0) return;
+        const [last, ...rest] = history;
+        if (last.side === "home") setHomeScore(s => Math.max(0, s - last.points));
+        if (last.side === "away") setAwayScore(s => Math.max(0, s - last.points));
+        setHistory(rest);
+      };
+
+      const resetMatch = () => {
+        setIsRunning(false);
+        setPeriod(1);
+        setSecondsLeft(PERIOD_LEN);
+        setHomeScore(0);
+        setAwayScore(0);
+        setHistory([]);
+        setIsFinished(false);
+        setFinishType(null);
+      };
+
+      const commitResult = () => {
+        const winner = homeScore > awayScore ? "home" : awayScore > homeScore ? "away" : "tie";
+        const isHomeWinner = winner === "home";
+
+        let dualPts = 0;
+        if (isHomeWinner) {
+          if (finishType === "Fall" || finishType === "Forfeit") dualPts = 6;
+          else if (finishType === "Tech Fall") dualPts = 5;
+          else if (finishType === "Major Decision") dualPts = 4;
+          else dualPts = 3;
+        }
+
+        let tourneyPts = 0;
+        if (isHomeWinner) {
+          tourneyPts = 2;
+          if (finishType === "Fall") tourneyPts += 2;
+          else if (finishType === "Tech Fall") tourneyPts += 1.5;
+          else if (finishType === "Major Decision") tourneyPts += 1;
+        }
+
+        const stats = history.reduce(
+          (acc, item) => {
+            if (item.side === "home") {
+              if (item.code === "TD") acc.td += 1;
+              if (item.code === "E") acc.e += 1;
+              if (item.code === "REV") acc.rev += 1;
+              if (item.code.startsWith("NF")) acc.nf += 1;
+            }
+            return acc;
+          },
+          { td: 0, e: 0, rev: 0, nf: 0 }
+        );
+
+        const record = {
+          id: "m_" + Date.now(),
+          eventType,
+          eventName: eventName || (eventType === "dual" ? "Dual Meet" : "Invitational"),
+          homeWrestler,
+          opponentName: awayWrestler,
+          weightClass,
+          homeScore,
+          awayScore,
+          winner,
+          winType: finishType || "Decision",
+          dualPointsAwarded: dualPts,
+          tourneyPointsAwarded: tourneyPts,
+          takedowns: stats.td,
+          escapes: stats.e,
+          reversals: stats.rev,
+          nearfalls: stats.nf,
+          date: new Date().toISOString().split("T")[0]
+        };
+
+        onSaveMatch(record);
+        resetMatch();
+      };
+
+      const formatTime = (s) => {
+        const m = Math.floor(s / 60);
+        const sec = s % 60;
+        return `${m}:${sec < 10 ? "0" : ""}${sec}`;
+      };
+
+      return (
+        <div className="flex flex-col h-full bg-slate-950 p-2 sm:p-4 gap-3 select-none">
+          {/* Top Control Bar */}
+          <div className="flex flex-wrap items-center justify-between gap-2 bg-slate-900 border border-slate-800 p-3 rounded-2xl shrink-0">
+            <div className="flex items-center gap-2">
+              <select
+                value={eventType}
+                onChange={(e) => setEventType(e.target.value)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-black uppercase tracking-wider ${
+                  eventType === "dual" ? "bg-blue-600 text-white" : "bg-purple-600 text-white"
+                }`}
+              >
+                <option value="dual">Dual Meet Mode</option>
+                <option value="tournament">Tournament Mode</option>
+              </select>
+
+              <input
+                type="text"
+                value={eventName}
+                onChange={(e) => setEventName(e.target.value)}
+                placeholder="Opponent / Tournament"
+                className="bg-slate-800 border border-slate-700 px-3 py-1.5 rounded-lg text-xs font-semibold focus:outline-none text-slate-200"
+              />
+
+              <div className="flex items-center gap-1 bg-slate-800 px-2 py-1 rounded-lg">
+                <span className="text-[11px] text-slate-400 font-bold">WT:</span>
+                <input
+                  type="text"
+                  value={weightClass}
+                  onChange={(e) => setWeightClass(e.target.value)}
+                  className="w-10 bg-transparent text-center text-xs font-black text-white focus:outline-none"
+                />
+              </div>
+            </div>
+
+            {/* Master Clock */}
+            <div className="flex items-center gap-4">
+              <div className="text-center">
+                <div className="text-[10px] uppercase tracking-widest text-slate-400 font-bold">
+                  {period === "OT" ? "Overtime" : `Period ${period}`}
+                </div>
+                <div
+                  className={`text-4xl sm:text-5xl font-mono font-black tracking-tight ${
+                    secondsLeft <= 10 && isRunning ? "text-red-500 animate-pulse" : "text-white"
+                  }`}
+                >
+                  {formatTime(secondsLeft)}
+                </div>
+              </div>
+
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setIsRunning(!isRunning)}
+                  className={`px-5 py-2.5 rounded-xl font-black text-sm uppercase tracking-wider transition ${
+                    isRunning ? "bg-amber-500 text-black hover:bg-amber-400" : "bg-emerald-500 text-black hover:bg-emerald-400"
+                  }`}
+                >
+                  {isRunning ? "Pause" : "Start"}
+                </button>
+                <button
+                  onClick={() => {
+                    setIsRunning(false);
+                    setSecondsLeft(period === "OT" ? OT_LEN : PERIOD_LEN);
+                  }}
+                  className="p-2.5 bg-slate-800 hover:bg-slate-700 rounded-xl text-slate-300 font-bold"
+                >
+                  ↺
+                </button>
+              </div>
+            </div>
+
+            {/* Action Buttons */}
+            <div className="flex items-center gap-2">
+              <button
+                onClick={undo}
+                disabled={history.length === 0}
+                className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-30 rounded-lg text-xs font-bold text-slate-300"
+              >
+                Undo Last
+              </button>
+              <button
+                onClick={advancePeriod}
+                className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 rounded-lg text-xs font-bold text-slate-300"
+              >
+                Next Period →
+              </button>
+            </div>
+          </div>
+
+          {/* Scoring Pads */}
+          <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-3 min-h-0">
+            {/* GREEN / HOME CORNER */}
+            <div className="flex flex-col bg-emerald-950/20 border-2 border-emerald-500/30 rounded-2xl p-3 sm:p-4 justify-between min-h-0">
+              <div className="flex items-center justify-between border-b border-emerald-800/40 pb-2">
+                <div className="flex-1 mr-2">
+                  <div className="text-[10px] font-bold text-emerald-400 uppercase tracking-widest">
+                    Green / Home
+                  </div>
+                  <select
+                    value={homeWrestler}
+                    onChange={(e) => setHomeWrestler(e.target.value)}
+                    className="bg-transparent text-lg sm:text-xl font-black text-emerald-300 focus:outline-none w-full"
+                  >
+                    {roster.map(w => (
+                      <option key={w.id} value={w.name} className="bg-slate-900 text-white">
+                        {w.name} ({w.weight} lbs)
+                      </option>
+                    ))}
+                    <option value="Custom Home" className="bg-slate-900 text-white">Other...</option>
+                  </select>
+                </div>
+                <div className="text-6xl sm:text-7xl font-mono font-black text-emerald-400">
+                  {homeScore}
+                </div>
+              </div>
+
+              {/* ACTION GRID: Same font size for term & number */}
+              <div className="grid grid-cols-3 gap-2.5 my-2 flex-1">
+                <button
+                  onClick={() => addScore("home", "TD", 3)}
+                  className="bg-emerald-600 hover:bg-emerald-500 active:scale-95 rounded-xl flex flex-col items-center justify-center p-2 text-center transition font-black text-xl sm:text-2xl"
+                >
+                  <span>TAKEDOWN</span>
+                  <span>+3</span>
+                </button>
+                <button
+                  onClick={() => addScore("home", "E", 1)}
+                  className="bg-emerald-700 hover:bg-emerald-600 active:scale-95 rounded-xl flex flex-col items-center justify-center p-2 text-center transition font-black text-xl sm:text-2xl"
+                >
+                  <span>ESCAPE</span>
+                  <span>+1</span>
+                </button>
+                <button
+                  onClick={() => addScore("home", "REV", 2)}
+                  className="bg-emerald-700 hover:bg-emerald-600 active:scale-95 rounded-xl flex flex-col items-center justify-center p-2 text-center transition font-black text-xl sm:text-2xl"
+                >
+                  <span>REVERSAL</span>
+                  <span>+2</span>
+                </button>
+                <button
+                  onClick={() => addScore("home", "NF2", 2)}
+                  className="bg-emerald-800 hover:bg-emerald-700 active:scale-95 rounded-xl flex flex-col items-center justify-center p-2 text-center transition font-black text-lg sm:text-xl"
+                >
+                  <span>NEAR FALL</span>
+                  <span>+2</span>
+                </button>
+                <button
+                  onClick={() => addScore("home", "NF3", 3)}
+                  className="bg-emerald-800 hover:bg-emerald-700 active:scale-95 rounded-xl flex flex-col items-center justify-center p-2 text-center transition font-black text-lg sm:text-xl"
+                >
+                  <span>NEAR FALL</span>
+                  <span>+3</span>
+                </button>
+                <button
+                  onClick={() => addScore("home", "NF4", 4)}
+                  className="bg-emerald-800 hover:bg-emerald-700 active:scale-95 rounded-xl flex flex-col items-center justify-center p-2 text-center transition font-black text-lg sm:text-xl"
+                >
+                  <span>NEAR FALL</span>
+                  <span>+4</span>
+                </button>
+              </div>
+
+              <div className="flex gap-2">
+                <button
+                  onClick={() => addScore("home", "PEN", 1)}
+                  className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs rounded-lg uppercase"
+                >
+                  +1 Penalty
+                </button>
+                <button
+                  onClick={() => finishMatch("home", "Fall")}
+                  className="flex-1 py-2 bg-emerald-500/20 border border-emerald-500 text-emerald-300 font-black text-xs rounded-lg uppercase hover:bg-emerald-500 hover:text-black transition"
+                >
+                  PIN / FALL ⚡
+                </button>
+              </div>
+            </div>
+
+            {/* RED / AWAY CORNER */}
+            <div className="flex flex-col bg-rose-950/20 border-2 border-rose-500/30 rounded-2xl p-3 sm:p-4 justify-between min-h-0">
+              <div className="flex items-center justify-between border-b border-rose-800/40 pb-2">
+                <div className="flex-1 mr-2">
+                  <div className="text-[10px] font-bold text-rose-400 uppercase tracking-widest">
+                    Red / Opponent
+                  </div>
+                  <input
+                    type="text"
+                    value={awayWrestler}
+                    onChange={(e) => setAwayWrestler(e.target.value)}
+                    className="bg-transparent text-lg sm:text-xl font-black text-rose-300 focus:outline-none w-full uppercase"
+                  />
+                </div>
+                <div className="text-6xl sm:text-7xl font-mono font-black text-rose-400">
+                  {awayScore}
+                </div>
+              </div>
+
+              {/* ACTION GRID: Same font size for term & number */}
+              <div className="grid grid-cols-3 gap-2.5 my-2 flex-1">
+                <button
+                  onClick={() => addScore("away", "TD", 3)}
+                  className="bg-rose-600 hover:bg-rose-500 active:scale-95 rounded-xl flex flex-col items-center justify-center p-2 text-center transition font-black text-xl sm:text-2xl"
+                >
+                  <span>TAKEDOWN</span>
+                  <span>+3</span>
+                </button>
+                <button
+                  onClick={() => addScore("away", "E", 1)}
+                  className="bg-rose-700 hover:bg-rose-600 active:scale-95 rounded-xl flex flex-col items-center justify-center p-2 text-center transition font-black text-xl sm:text-2xl"
+                >
+                  <span>ESCAPE</span>
+                  <span>+1</span>
+                </button>
+                <button
+                  onClick={() => addScore("away", "REV", 2)}
+                  className="bg-rose-700 hover:bg-rose-600 active:scale-95 rounded-xl flex flex-col items-center justify-center p-2 text-center transition font-black text-xl sm:text-2xl"
+                >
+                  <span>REVERSAL</span>
+                  <span>+2</span>
+                </button>
+                <button
+                  onClick={() => addScore("away", "NF2", 2)}
+                  className="bg-rose-800 hover:bg-rose-700 active:scale-95 rounded-xl flex flex-col items-center justify-center p-2 text-center transition font-black text-lg sm:text-xl"
+                >
+                  <span>NEAR FALL</span>
+                  <span>+2</span>
+                </button>
+                <button
+                  onClick={() => addScore("away", "NF3", 3)}
+                  className="bg-rose-800 hover:bg-rose-700 active:scale-95 rounded-xl flex flex-col items-center justify-center p-2 text-center transition font-black text-lg sm:text-xl"
+                >
+                  <span>NEAR FALL</span>
+                  <span>+3</span>
+                </button>
+                <button
+                  onClick={() => addScore("away", "NF4", 4)}
+                  className="bg-rose-800 hover:bg-rose-700 active:scale-95 rounded-xl flex flex-col items-center justify-center p-2 text-center transition font-black text-lg sm:text-xl"
+                >
+                  <span>NEAR FALL</span>
+                  <span>+4</span>
+                </button>
+              </div>
+
+              <div className="flex gap-2">
+                <button
+                  onClick={() => addScore("away", "PEN", 1)}
+                  className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs rounded-lg uppercase"
+                >
+                  +1 Penalty
+                </button>
+                <button
+                  onClick={() => finishMatch("away", "Fall")}
+                  className="flex-1 py-2 bg-rose-500/20 border border-rose-500 text-rose-300 font-black text-xs rounded-lg uppercase hover:bg-rose-500 hover:text-black transition"
+                >
+                  PIN / FALL ⚡
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Action Log Bar */}
+          <div className="h-10 bg-slate-900 border border-slate-800 rounded-xl flex items-center px-3 overflow-x-auto gap-2 text-xs shrink-0">
+            <span className="font-bold text-slate-500 uppercase text-[10px] shrink-0">Log:</span>
+            {history.length === 0 && <span className="text-slate-500 italic">No score events yet.</span>}
+            {history.map(item => (
+              <span
+                key={item.id}
+                className={`px-2 py-0.5 rounded font-mono shrink-0 text-xs font-semibold ${
+                  item.side === "home" ? "bg-emerald-950 text-emerald-300 border border-emerald-800" : "bg-rose-950 text-rose-300 border border-rose-800"
+                }`}
+              >
+                {item.side === "home" ? "HOM" : "OPP"} +{item.points} ({item.code}) P{item.period}
+              </span>
+            ))}
+          </div>
+
+          {/* Completed Match Dialog */}
+          {isFinished && (
+            <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+              <div className="bg-slate-900 border border-slate-700 p-6 rounded-2xl max-w-sm w-full text-center shadow-2xl">
+                <div className="text-3xl mb-1">🏆</div>
+                <h3 className="text-xl font-black uppercase tracking-wider text-white">
+                  Match Concluded
+                </h3>
+                <div className="text-sm font-semibold text-amber-400 mt-1">
+                  Result: {finishType}
+                </div>
+
+                <div className="flex items-center justify-around my-5 py-3 bg-slate-800 rounded-xl">
+                  <div>
+                    <div className="text-xs font-bold text-emerald-400">{homeWrestler}</div>
+                    <div className="text-3xl font-mono font-black">{homeScore}</div>
+                  </div>
+                  <div className="text-slate-500 font-bold">vs</div>
+                  <div>
+                    <div className="text-xs font-bold text-rose-400">{awayWrestler}</div>
+                    <div className="text-3xl font-mono font-black">{awayScore}</div>
+                  </div>
+                </div>
+
+                <div className="text-xs text-slate-400 mb-5">
+                  {eventType === "dual" ? (
+                    <span>
+                      Dual Team Points to award:{" "}
+                      <strong className="text-blue-400 font-bold text-sm">
+                        {homeScore >= awayScore
+                          ? finishType === "Fall" ? 6 : finishType === "Tech Fall" ? 5 : finishType === "Major Decision" ? 4 : 3
+                          : 0} pts
+                      </strong>
+                    </span>
+                  ) : (
+                    <span>
+                      Tournament Advancement + Bonus:{" "}
+                      <strong className="text-purple-400 font-bold text-sm">
+                        {homeScore >= awayScore
+                          ? finishType === "Fall" ? 4 : finishType === "Tech Fall" ? 3.5 : finishType === "Major Decision" ? 3 : 2
+                          : 0} pts
+                      </strong>
+                    </span>
+                  )}
+                </div>
+
+                <div className="flex gap-2">
+                  <button
+                    onClick={resetMatch}
+                    className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-700 rounded-xl font-bold text-xs uppercase"
+                  >
+                    Discard
+                  </button>
+                  <button
+                    onClick={commitResult}
+                    className="flex-1 py-2.5 bg-emerald-500 hover:bg-emerald-400 text-black rounded-xl font-black text-xs uppercase tracking-wider"
+                  >
+                    Save & Submit
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // =========================================================================
+    // DUAL MEETS VIEW
+    // =========================================================================
+    function DualMeetsView({ matches }) {
+      const totalTeamPtsScored = matches.reduce((sum, m) => sum + m.dualPointsAwarded, 0);
+      const totalDualWins = matches.filter(m => m.winner === "home").length;
+
+      return (
+        <div className="p-4 sm:p-6 max-w-6xl mx-auto space-y-6">
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+            <div>
+              <h2 className="text-2xl font-black text-white uppercase tracking-tight">
+                Dual Meets Performance
+              </h2>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Head-to-head dual matches (Fall = 6, Tech = 5, Major = 4, Dec = 3)
+              </p>
+            </div>
+            <div className="flex gap-3">
+              <div className="bg-slate-900 border border-slate-800 px-4 py-2 rounded-xl text-center">
+                <div className="text-[10px] text-slate-400 uppercase font-bold">Dual Match Record</div>
+                <div className="text-xl font-mono font-black text-blue-400">
+                  {totalDualWins}W - {matches.length - totalDualWins}L
+                </div>
+              </div>
+              <div className="bg-slate-900 border border-slate-800 px-4 py-2 rounded-xl text-center">
+                <div className="text-[10px] text-slate-400 uppercase font-bold">Team Dual Pts Earned</div>
+                <div className="text-xl font-mono font-black text-amber-400">
+                  {totalTeamPtsScored}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-800/70 uppercase text-slate-400 font-bold border-b border-slate-700">
+                  <tr>
+                    <th className="p-3">Date</th>
+                    <th className="p-3">Event / Opponent</th>
+                    <th className="p-3">Weight</th>
+                    <th className="p-3">Wrestler</th>
+                    <th className="p-3">Opponent</th>
+                    <th className="p-3 text-center">Score</th>
+                    <th className="p-3">Outcome</th>
+                    <th className="p-3 text-right">Team Pts</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800 font-medium">
+                  {matches.length === 0 ? (
+                    <tr>
+                      <td colSpan="8" className="p-6 text-center text-slate-500 italic">
+                        No dual meet matches recorded yet. Score one from the Live Scorer!
+                      </td>
+                    </tr>
+                  ) : (
+                    matches.map(m => (
+                      <tr key={m.id} className="hover:bg-slate-800/40 transition">
+                        <td className="p-3 font-mono text-slate-400">{m.date}</td>
+                        <td className="p-3 font-bold text-white">{m.eventName}</td>
+                        <td className="p-3 font-bold text-slate-300">{m.weightClass} lbs</td>
+                        <td className="p-3 font-semibold text-emerald-400">{m.homeWrestler}</td>
+                        <td className="p-3 text-slate-400">{m.opponentName}</td>
+                        <td className="p-3 text-center font-mono font-bold">
+                          {m.homeScore} - {m.awayScore}
+                        </td>
+                        <td className="p-3">
+                          <span
+                            className={`px-2 py-0.5 rounded text-[11px] font-bold ${
+                              m.winner === "home"
+                                ? "bg-emerald-950 text-emerald-300 border border-emerald-800"
+                                : "bg-rose-950 text-rose-300 border border-rose-800"
+                            }`}
+                          >
+                            {m.winType}
+                          </span>
+                        </td>
+                        <td className="p-3 text-right font-mono font-black text-amber-400">
+                          +{m.dualPointsAwarded}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // =========================================================================
+    // TOURNAMENTS VIEW
+    // =========================================================================
+    function TournamentsView({ matches }) {
+      const totalTourneyPts = matches.reduce((sum, m) => sum + m.tourneyPointsAwarded, 0);
+      const falls = matches.filter(m => m.winner === "home" && m.winType === "Fall").length;
+
+      return (
+        <div className="p-4 sm:p-6 max-w-6xl mx-auto space-y-6">
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+            <div>
+              <h2 className="text-2xl font-black text-white uppercase tracking-tight">
+                Tournament Brackets & Bonus
+              </h2>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Advancements (2 pts) + Bonus (Fall: +2, Tech: +1.5, Maj: +1)
+              </p>
+            </div>
+            <div className="flex gap-3">
+              <div className="bg-slate-900 border border-slate-800 px-4 py-2 rounded-xl text-center">
+                <div className="text-[10px] text-slate-400 uppercase font-bold">Pins / Falls</div>
+                <div className="text-xl font-mono font-black text-purple-400">
+                  {falls}
+                </div>
+              </div>
+              <div className="bg-slate-900 border border-slate-800 px-4 py-2 rounded-xl text-center">
+                <div className="text-[10px] text-slate-400 uppercase font-bold">Total Team Adv Pts</div>
+                <div className="text-xl font-mono font-black text-amber-400">
+                  {totalTourneyPts}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-800/70 uppercase text-slate-400 font-bold border-b border-slate-700">
+                  <tr>
+                    <th className="p-3">Date</th>
+                    <th className="p-3">Tournament Name</th>
+                    <th className="p-3">Weight</th>
+                    <th className="p-3">Wrestler</th>
+                    <th className="p-3">Opponent</th>
+                    <th className="p-3 text-center">Score</th>
+                    <th className="p-3">Result</th>
+                    <th className="p-3 text-right">Adv/Bonus Pts</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800 font-medium">
+                  {matches.length === 0 ? (
+                    <tr>
+                      <td colSpan="8" className="p-6 text-center text-slate-500 italic">
+                        No tournament bouts recorded yet. Select 'Tournament Mode' when scoring!
+                      </td>
+                    </tr>
+                  ) : (
+                    matches.map(m => (
+                      <tr key={m.id} className="hover:bg-slate-800/40 transition">
+                        <td className="p-3 font-mono text-slate-400">{m.date}</td>
+                        <td className="p-3 font-bold text-white">{m.eventName}</td>
+                        <td className="p-3 font-bold text-slate-300">{m.weightClass} lbs</td>
+                        <td className="p-3 font-semibold text-emerald-400">{m.homeWrestler}</td>
+                        <td className="p-3 text-slate-400">{m.opponentName}</td>
+                        <td className="p-3 text-center font-mono font-bold">
+                          {m.homeScore} - {m.awayScore}
+                        </td>
+                        <td className="p-3">
+                          <span
+                            className={`px-2 py-0.5 rounded text-[11px] font-bold ${
+                              m.winner === "home"
+                                ? "bg-purple-950 text-purple-300 border border-purple-800"
+                                : "bg-rose-950 text-rose-300 border border-rose-800"
+                            }`}
+                          >
+                            {m.winType}
+                          </span>
+                        </td>
+                        <td className="p-3 text-right font-mono font-black text-amber-400">
+                          +{m.tourneyPointsAwarded}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // =========================================================================
+    // ROSTER VIEW
+    // =========================================================================
+    function RosterView({ roster, setRoster, matches }) {
+      const [newName, setNewName] = useState("");
+      const [newWeight, setNewWeight] = useState("");
+      const [newGrade, setNewGrade] = useState("Fr");
+
+      const addWrestler = (e) => {
+        e.preventDefault();
+        if (!newName || !newWeight) return;
+        const entry = {
+          id: "w_" + Date.now(),
+          name: newName,
+          weight: newWeight,
+          grade: newGrade
+        };
+        setRoster([...roster, entry]);
+        setNewName("");
+        setNewWeight("");
+      };
+
+      const computeStats = (wrestlerName) => {
+        const wMatches = matches.filter(m => m.homeWrestler === wrestlerName);
+        const wins = wMatches.filter(m => m.winner === "home").length;
+        const losses = wMatches.length - wins;
+        const falls = wMatches.filter(m => m.winner === "home" && m.winType === "Fall").length;
+        const td = wMatches.reduce((s, m) => s + (m.takedowns || 0), 0);
+        const e = wMatches.reduce((s, m) => s + (m.escapes || 0), 0);
+        const rev = wMatches.reduce((s, m) => s + (m.reversals || 0), 0);
+        const nf = wMatches.reduce((s, m) => s + (m.nearfalls || 0), 0);
+
+        const dualWins = wMatches.filter(m => m.eventType === "dual" && m.winner === "home").length;
+        const tourneyWins = wMatches.filter(m => m.eventType === "tournament" && m.winner === "home").length;
+
+        return {
+          total: wMatches.length,
+          record: `${wins}-${losses}`,
+          dualRecord: `${dualWins}-${wMatches.filter(m => m.eventType === "dual").length - dualWins}`,
+          tourneyRecord: `${tourneyWins}-${wMatches.filter(m => m.eventType === "tournament").length - tourneyWins}`,
+          falls,
+          td,
+          e,
+          rev,
+          nf
+        };
+      };
+
+      return (
+        <div className="p-4 sm:p-6 max-w-6xl mx-auto space-y-6">
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+            <div>
+              <h2 className="text-2xl font-black text-white uppercase tracking-tight">
+                Team Roster & Season Breakdown
+              </h2>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Separated records across Dual Meets and Weekend Tournaments
+              </p>
+            </div>
+
+            <form onSubmit={addWrestler} className="flex flex-wrap items-center gap-2 bg-slate-900 border border-slate-800 p-2 rounded-xl">
+              <input
+                type="text"
+                placeholder="Wrestler Name"
+                value={newName}
+                onChange={e => setNewName(e.target.value)}
+                className="bg-slate-800 border border-slate-700 px-3 py-1.5 rounded-lg text-xs font-semibold focus:outline-none"
+              />
+              <input
+                type="text"
+                placeholder="Wt (lbs)"
+                value={newWeight}
+                onChange={e => setNewWeight(e.target.value)}
+                className="w-16 bg-slate-800 border border-slate-700 px-2 py-1.5 rounded-lg text-xs text-center font-bold focus:outline-none"
+              />
+              <select
+                value={newGrade}
+                onChange={e => setNewGrade(e.target.value)}
+                className="bg-slate-800 border border-slate-700 px-2 py-1.5 rounded-lg text-xs font-bold focus:outline-none"
+              >
+                <option value="Fr">Fr</option>
+                <option value="So">So</option>
+                <option value="Jr">Jr</option>
+                <option value="Sr">Sr</option>
+              </select>
+              <button
+                type="submit"
+                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-xs font-black uppercase text-white"
+              >
+                + Add
+              </button>
+            </form>
+          </div>
+
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-800/70 uppercase text-slate-400 font-bold border-b border-slate-700">
+                  <tr>
+                    <th className="p-3">Wrestler</th>
+                    <th className="p-3">Weight</th>
+                    <th className="p-3">Overall</th>
+                    <th className="p-3 text-blue-400">Dual Record</th>
+                    <th className="p-3 text-purple-400">Tourney Record</th>
+                    <th className="p-3 text-center">Pins</th>
+                    <th className="p-3 text-center">Takedowns</th>
+                    <th className="p-3 text-center">Escapes</th>
+                    <th className="p-3 text-center">Reversals</th>
+                    <th className="p-3 text-center">Near Falls</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800 font-medium">
+                  {roster.map(w => {
+                    const st = computeStats(w.name);
+                    return (
+                      <tr key={w.id} className="hover:bg-slate-800/40 transition">
+                        <td className="p-3 font-bold text-white">
+                          {w.name}{" "}
+                          <span className="text-[10px] text-slate-500 uppercase ml-1">({w.grade})</span>
+                        </td>
+                        <td className="p-3 font-mono text-slate-300">{w.weight} lbs</td>
+                        <td className="p-3 font-mono font-bold text-amber-400">{st.record}</td>
+                        <td className="p-3 font-mono text-blue-400">{st.dualRecord}</td>
+                        <td className="p-3 font-mono text-purple-400">{st.tourneyRecord}</td>
+                        <td className="p-3 text-center font-mono font-bold text-rose-400">{st.falls}</td>
+                        <td className="p-3 text-center font-mono">{st.td}</td>
+                        <td className="p-3 text-center font-mono">{st.e}</td>
+                        <td className="p-3 text-center font-mono">{st.rev}</td>
+                        <td className="p-3 text-center font-mono">{st.nf}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById("root"));
+    root.render(<App />);
+  </script>
+</body>
+</html>
