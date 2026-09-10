@@ -30,9 +30,9 @@
   <div id="root"></div>
 
   <script type="text/babel">
-    const { useState, useEffect, useRef } = React;
+    const { useState, useEffect } = React;
 
-    // Audio Synthesizer for Period Buzzer
+    // Gym Buzzer Audio Synthesizer
     const playBuzzer = () => {
       try {
         const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -93,6 +93,9 @@
         return saved ? JSON.parse(saved) : INITIAL_MATCHES;
       });
 
+      // Match selected for editing in modal
+      const [editingMatch, setEditingMatch] = useState(null);
+
       useEffect(() => {
         localStorage.setItem("mattrack_roster", JSON.stringify(roster));
       }, [roster]);
@@ -104,6 +107,24 @@
       const handleSaveMatch = (newMatch) => {
         setMatches([newMatch, ...matches]);
         setView(newMatch.eventType === "dual" ? "dual" : "tournament");
+      };
+
+      const handleUpdateMatch = (updatedMatch) => {
+        setMatches(matches.map(m => m.id === updatedMatch.id ? updatedMatch : m));
+        setEditingMatch(null);
+      };
+
+      const handleDeleteMatch = (id) => {
+        if (confirm("Are you sure you want to delete this match record?")) {
+          setMatches(matches.filter(m => m.id !== id));
+          setEditingMatch(null);
+        }
+      };
+
+      const handleRemoveWrestler = (id, name) => {
+        if (confirm(`Remove ${name} from the roster? Recorded match history will remain intact.`)) {
+          setRoster(roster.filter(w => w.id !== id));
+        }
       };
 
       return (
@@ -160,21 +181,43 @@
               <LiveScorer roster={roster} onSaveMatch={handleSaveMatch} />
             )}
             {view === "dual" && (
-              <DualMeetsView matches={matches.filter(m => m.eventType === "dual")} />
+              <DualMeetsView
+                matches={matches.filter(m => m.eventType === "dual")}
+                onEditMatch={setEditingMatch}
+              />
             )}
             {view === "tournament" && (
-              <TournamentsView matches={matches.filter(m => m.eventType === "tournament")} />
+              <TournamentsView
+                matches={matches.filter(m => m.eventType === "tournament")}
+                onEditMatch={setEditingMatch}
+              />
             )}
             {view === "roster" && (
-              <RosterView roster={roster} setRoster={setRoster} matches={matches} />
+              <RosterView
+                roster={roster}
+                setRoster={setRoster}
+                matches={matches}
+                onRemoveWrestler={handleRemoveWrestler}
+              />
             )}
           </main>
+
+          {/* Edit Match Modal */}
+          {editingMatch && (
+            <EditMatchModal
+              match={editingMatch}
+              roster={roster}
+              onSave={handleUpdateMatch}
+              onDelete={handleDeleteMatch}
+              onClose={() => setEditingMatch(null)}
+            />
+          )}
         </div>
       );
     }
 
     // =========================================================================
-    // COMPONENT: LIVE SCORER (WITH EQUAL SIZED NUMBERS & LABELS)
+    // COMPONENT: LIVE SCORER
     // =========================================================================
     function LiveScorer({ roster, onSaveMatch }) {
       const [eventType, setEventType] = useState("dual");
@@ -183,14 +226,12 @@
       const [homeWrestler, setHomeWrestler] = useState(roster[0]?.name || "Home Wrestler");
       const [awayWrestler, setAwayWrestler] = useState("Opponent");
 
-      // Clock
       const PERIOD_LEN = 120;
       const OT_LEN = 60;
       const [period, setPeriod] = useState(1);
       const [secondsLeft, setSecondsLeft] = useState(PERIOD_LEN);
       const [isRunning, setIsRunning] = useState(false);
 
-      // Score
       const [homeScore, setHomeScore] = useState(0);
       const [awayScore, setAwayScore] = useState(0);
       const [history, setHistory] = useState([]);
@@ -342,7 +383,7 @@
 
       return (
         <div className="flex flex-col h-full bg-slate-950 p-2 sm:p-4 gap-3 select-none">
-          {/* Top Control Bar */}
+          {/* Top Bar */}
           <div className="flex flex-wrap items-center justify-between gap-2 bg-slate-900 border border-slate-800 p-3 rounded-2xl shrink-0">
             <div className="flex items-center gap-2">
               <select
@@ -411,7 +452,6 @@
               </div>
             </div>
 
-            {/* Action Buttons */}
             <div className="flex items-center gap-2">
               <button
                 onClick={undo}
@@ -448,7 +488,7 @@
                         {w.name} ({w.weight} lbs)
                       </option>
                     ))}
-                    <option value="Custom Home" className="bg-slate-900 text-white">Other...</option>
+                    <option value="Other Wrestler" className="bg-slate-900 text-white">Other...</option>
                   </select>
                 </div>
                 <div className="text-6xl sm:text-7xl font-mono font-black text-emerald-400">
@@ -456,7 +496,7 @@
                 </div>
               </div>
 
-              {/* ACTION GRID: Same font size for term & number */}
+              {/* ACTION GRID */}
               <div className="grid grid-cols-3 gap-2.5 my-2 flex-1">
                 <button
                   onClick={() => addScore("home", "TD", 3)}
@@ -537,7 +577,7 @@
                 </div>
               </div>
 
-              {/* ACTION GRID: Same font size for term & number */}
+              {/* ACTION GRID */}
               <div className="grid grid-cols-3 gap-2.5 my-2 flex-1">
                 <button
                   onClick={() => addScore("away", "TD", 3)}
@@ -600,7 +640,7 @@
             </div>
           </div>
 
-          {/* Action Log Bar */}
+          {/* Action Log Strip */}
           <div className="h-10 bg-slate-900 border border-slate-800 rounded-xl flex items-center px-3 overflow-x-auto gap-2 text-xs shrink-0">
             <span className="font-bold text-slate-500 uppercase text-[10px] shrink-0">Log:</span>
             {history.length === 0 && <span className="text-slate-500 italic">No score events yet.</span>}
@@ -684,10 +724,10 @@
     }
 
     // =========================================================================
-    // DUAL MEETS VIEW
+    // COMPONENT: DUAL MEETS VIEW (WITH EDIT BUTTON)
     // =========================================================================
-    function DualMeetsView({ matches }) {
-      const totalTeamPtsScored = matches.reduce((sum, m) => sum + m.dualPointsAwarded, 0);
+    function DualMeetsView({ matches, onEditMatch }) {
+      const totalTeamPtsScored = matches.reduce((sum, m) => sum + (m.dualPointsAwarded || 0), 0);
       const totalDualWins = matches.filter(m => m.winner === "home").length;
 
       return (
@@ -729,13 +769,14 @@
                     <th className="p-3">Opponent</th>
                     <th className="p-3 text-center">Score</th>
                     <th className="p-3">Outcome</th>
-                    <th className="p-3 text-right">Team Pts</th>
+                    <th className="p-3 text-center">Team Pts</th>
+                    <th className="p-3 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800 font-medium">
                   {matches.length === 0 ? (
                     <tr>
-                      <td colSpan="8" className="p-6 text-center text-slate-500 italic">
+                      <td colSpan="9" className="p-6 text-center text-slate-500 italic">
                         No dual meet matches recorded yet. Score one from the Live Scorer!
                       </td>
                     </tr>
@@ -761,8 +802,16 @@
                             {m.winType}
                           </span>
                         </td>
-                        <td className="p-3 text-right font-mono font-black text-amber-400">
+                        <td className="p-3 text-center font-mono font-black text-amber-400">
                           +{m.dualPointsAwarded}
+                        </td>
+                        <td className="p-3 text-right">
+                          <button
+                            onClick={() => onEditMatch(m)}
+                            className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 hover:text-white rounded text-[11px] font-bold"
+                          >
+                            Edit
+                          </button>
                         </td>
                       </tr>
                     ))
@@ -776,10 +825,10 @@
     }
 
     // =========================================================================
-    // TOURNAMENTS VIEW
+    // COMPONENT: TOURNAMENTS VIEW (WITH EDIT BUTTON)
     // =========================================================================
-    function TournamentsView({ matches }) {
-      const totalTourneyPts = matches.reduce((sum, m) => sum + m.tourneyPointsAwarded, 0);
+    function TournamentsView({ matches, onEditMatch }) {
+      const totalTourneyPts = matches.reduce((sum, m) => sum + (m.tourneyPointsAwarded || 0), 0);
       const falls = matches.filter(m => m.winner === "home" && m.winType === "Fall").length;
 
       return (
@@ -821,13 +870,14 @@
                     <th className="p-3">Opponent</th>
                     <th className="p-3 text-center">Score</th>
                     <th className="p-3">Result</th>
-                    <th className="p-3 text-right">Adv/Bonus Pts</th>
+                    <th className="p-3 text-center">Adv/Bonus Pts</th>
+                    <th className="p-3 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800 font-medium">
                   {matches.length === 0 ? (
                     <tr>
-                      <td colSpan="8" className="p-6 text-center text-slate-500 italic">
+                      <td colSpan="9" className="p-6 text-center text-slate-500 italic">
                         No tournament bouts recorded yet. Select 'Tournament Mode' when scoring!
                       </td>
                     </tr>
@@ -853,8 +903,16 @@
                             {m.winType}
                           </span>
                         </td>
-                        <td className="p-3 text-right font-mono font-black text-amber-400">
+                        <td className="p-3 text-center font-mono font-black text-amber-400">
                           +{m.tourneyPointsAwarded}
+                        </td>
+                        <td className="p-3 text-right">
+                          <button
+                            onClick={() => onEditMatch(m)}
+                            className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 hover:text-white rounded text-[11px] font-bold"
+                          >
+                            Edit
+                          </button>
                         </td>
                       </tr>
                     ))
@@ -868,9 +926,237 @@
     }
 
     // =========================================================================
-    // ROSTER VIEW
+    // COMPONENT: EDIT MATCH MODAL (ADJUST ANY STAT AFTER THE MATCH)
     // =========================================================================
-    function RosterView({ roster, setRoster, matches }) {
+    function EditMatchModal({ match, roster, onSave, onDelete, onClose }) {
+      const [formData, setFormData] = useState({ ...match });
+
+      const handleScoreChange = (home, away) => {
+        const h = parseInt(home) || 0;
+        const a = parseInt(away) || 0;
+        const winner = h > a ? "home" : a > h ? "away" : "tie";
+        setFormData({ ...formData, homeScore: h, awayScore: a, winner });
+      };
+
+      const handleSave = (e) => {
+        e.preventDefault();
+        const isHomeWinner = formData.winner === "home";
+        let dualPts = 0;
+        if (isHomeWinner) {
+          if (formData.winType === "Fall" || formData.winType === "Forfeit") dualPts = 6;
+          else if (formData.winType === "Tech Fall") dualPts = 5;
+          else if (formData.winType === "Major Decision") dualPts = 4;
+          else dualPts = 3;
+        }
+
+        let tourneyPts = 0;
+        if (isHomeWinner) {
+          tourneyPts = 2;
+          if (formData.winType === "Fall") tourneyPts += 2;
+          else if (formData.winType === "Tech Fall") tourneyPts += 1.5;
+          else if (formData.winType === "Major Decision") tourneyPts += 1;
+        }
+
+        onSave({
+          ...formData,
+          dualPointsAwarded: dualPts,
+          tourneyPointsAwarded: tourneyPts,
+          takedowns: parseInt(formData.takedowns) || 0,
+          escapes: parseInt(formData.escapes) || 0,
+          reversals: parseInt(formData.reversals) || 0,
+          nearfalls: parseInt(formData.nearfalls) || 0
+        });
+      };
+
+      return (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50 overflow-y-auto">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl max-w-lg w-full p-5 sm:p-6 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3 mb-4">
+              <h3 className="text-lg font-black uppercase text-white tracking-wide">
+                Adjust Match Statistics
+              </h3>
+              <button onClick={onClose} className="text-slate-400 hover:text-white text-xl font-bold">
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleSave} className="space-y-4 text-xs">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-slate-400 font-bold uppercase block mb-1">Event Type</label>
+                  <select
+                    value={formData.eventType}
+                    onChange={(e) => setFormData({ ...formData, eventType: e.target.value })}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-lg p-2 font-bold focus:outline-none"
+                  >
+                    <option value="dual">Dual Meet</option>
+                    <option value="tournament">Tournament</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-slate-400 font-bold uppercase block mb-1">Event Name</label>
+                  <input
+                    type="text"
+                    value={formData.eventName}
+                    onChange={(e) => setFormData({ ...formData, eventName: e.target.value })}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-lg p-2 font-bold focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-3">
+                <div className="col-span-2">
+                  <label className="text-slate-400 font-bold uppercase block mb-1">Our Wrestler</label>
+                  <select
+                    value={formData.homeWrestler}
+                    onChange={(e) => setFormData({ ...formData, homeWrestler: e.target.value })}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-lg p-2 font-bold focus:outline-none text-emerald-400"
+                  >
+                    {roster.map(w => (
+                      <option key={w.id} value={w.name}>
+                        {w.name} ({w.weight} lbs)
+                      </option>
+                    ))}
+                    <option value={formData.homeWrestler}>{formData.homeWrestler}</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-slate-400 font-bold uppercase block mb-1">Weight</label>
+                  <input
+                    type="text"
+                    value={formData.weightClass}
+                    onChange={(e) => setFormData({ ...formData, weightClass: e.target.value })}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-lg p-2 font-bold text-center focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-slate-400 font-bold uppercase block mb-1">Opponent & School</label>
+                <input
+                  type="text"
+                  value={formData.opponentName}
+                  onChange={(e) => setFormData({ ...formData, opponentName: e.target.value })}
+                  className="w-full bg-slate-800 border border-slate-700 rounded-lg p-2 font-bold focus:outline-none text-rose-400"
+                />
+              </div>
+
+              {/* Score & Result */}
+              <div className="grid grid-cols-3 gap-3 bg-slate-800/60 p-3 rounded-xl border border-slate-800">
+                <div>
+                  <label className="text-emerald-400 font-bold uppercase block mb-1 text-[11px]">Home Score</label>
+                  <input
+                    type="number"
+                    value={formData.homeScore}
+                    onChange={(e) => handleScoreChange(e.target.value, formData.awayScore)}
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 font-mono font-black text-center text-lg"
+                  />
+                </div>
+                <div>
+                  <label className="text-rose-400 font-bold uppercase block mb-1 text-[11px]">Opp Score</label>
+                  <input
+                    type="number"
+                    value={formData.awayScore}
+                    onChange={(e) => handleScoreChange(formData.homeScore, e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 font-mono font-black text-center text-lg"
+                  />
+                </div>
+                <div>
+                  <label className="text-slate-400 font-bold uppercase block mb-1 text-[11px]">Win Type</label>
+                  <select
+                    value={formData.winType}
+                    onChange={(e) => setFormData({ ...formData, winType: e.target.value })}
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 font-bold"
+                  >
+                    <option value="Fall">Fall (Pin)</option>
+                    <option value="Tech Fall">Tech Fall</option>
+                    <option value="Major Decision">Major Decision</option>
+                    <option value="Decision">Decision</option>
+                    <option value="Forfeit">Forfeit</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Action Stat Adjustments */}
+              <div className="bg-slate-800/40 p-3 rounded-xl border border-slate-800">
+                <span className="font-bold text-slate-400 uppercase text-[10px] block mb-2">
+                  Adjust Recorded Action Tallies:
+                </span>
+                <div className="grid grid-cols-4 gap-2 text-center">
+                  <div>
+                    <label className="text-slate-400 font-bold block mb-1">TD (+3)</label>
+                    <input
+                      type="number"
+                      value={formData.takedowns}
+                      onChange={(e) => setFormData({ ...formData, takedowns: e.target.value })}
+                      className="w-full bg-slate-900 border border-slate-700 rounded p-1.5 font-bold font-mono text-center"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-slate-400 font-bold block mb-1">Escape</label>
+                    <input
+                      type="number"
+                      value={formData.escapes}
+                      onChange={(e) => setFormData({ ...formData, escapes: e.target.value })}
+                      className="w-full bg-slate-900 border border-slate-700 rounded p-1.5 font-bold font-mono text-center"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-slate-400 font-bold block mb-1">Reversal</label>
+                    <input
+                      type="number"
+                      value={formData.reversals}
+                      onChange={(e) => setFormData({ ...formData, reversals: e.target.value })}
+                      className="w-full bg-slate-900 border border-slate-700 rounded p-1.5 font-bold font-mono text-center"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-slate-400 font-bold block mb-1">Near Falls</label>
+                    <input
+                      type="number"
+                      value={formData.nearfalls}
+                      onChange={(e) => setFormData({ ...formData, nearfalls: e.target.value })}
+                      className="w-full bg-slate-900 border border-slate-700 rounded p-1.5 font-bold font-mono text-center"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex items-center justify-between pt-2">
+                <button
+                  type="button"
+                  onClick={() => onDelete(formData.id)}
+                  className="px-3 py-2 bg-rose-950 border border-rose-800 hover:bg-rose-900 text-rose-300 rounded-xl font-bold transition"
+                >
+                  Delete Match
+                </button>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={onClose}
+                    className="px-4 py-2 bg-slate-800 hover:bg-slate-700 rounded-xl font-bold text-slate-300"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-5 py-2 bg-emerald-500 hover:bg-emerald-400 text-black rounded-xl font-black uppercase tracking-wider"
+                  >
+                    Save Changes
+                  </button>
+                </div>
+              </div>
+            </form>
+          </div>
+        </div>
+      );
+    }
+
+    // =========================================================================
+    // COMPONENT: ROSTER VIEW (WITH REMOVAL SUPPORT)
+    // =========================================================================
+    function RosterView({ roster, setRoster, matches, onRemoveWrestler }) {
       const [newName, setNewName] = useState("");
       const [newWeight, setNewWeight] = useState("");
       const [newGrade, setNewGrade] = useState("Fr");
@@ -923,24 +1209,25 @@
                 Team Roster & Season Breakdown
               </h2>
               <p className="text-xs text-slate-400 mt-0.5">
-                Separated records across Dual Meets and Weekend Tournaments
+                Manage squad roster and separated records across Duals and Tournaments
               </p>
             </div>
 
+            {/* Add Wrestler */}
             <form onSubmit={addWrestler} className="flex flex-wrap items-center gap-2 bg-slate-900 border border-slate-800 p-2 rounded-xl">
               <input
                 type="text"
                 placeholder="Wrestler Name"
                 value={newName}
                 onChange={e => setNewName(e.target.value)}
-                className="bg-slate-800 border border-slate-700 px-3 py-1.5 rounded-lg text-xs font-semibold focus:outline-none"
+                className="bg-slate-800 border border-slate-700 px-3 py-1.5 rounded-lg text-xs font-semibold focus:outline-none text-white"
               />
               <input
                 type="text"
                 placeholder="Wt (lbs)"
                 value={newWeight}
                 onChange={e => setNewWeight(e.target.value)}
-                className="w-16 bg-slate-800 border border-slate-700 px-2 py-1.5 rounded-lg text-xs text-center font-bold focus:outline-none"
+                className="w-16 bg-slate-800 border border-slate-700 px-2 py-1.5 rounded-lg text-xs text-center font-bold focus:outline-none text-white"
               />
               <select
                 value={newGrade}
@@ -961,6 +1248,7 @@
             </form>
           </div>
 
+          {/* Roster Table */}
           <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs">
@@ -972,33 +1260,51 @@
                     <th className="p-3 text-blue-400">Dual Record</th>
                     <th className="p-3 text-purple-400">Tourney Record</th>
                     <th className="p-3 text-center">Pins</th>
-                    <th className="p-3 text-center">Takedowns</th>
+                    <th className="p-3 text-center">TDs</th>
                     <th className="p-3 text-center">Escapes</th>
                     <th className="p-3 text-center">Reversals</th>
                     <th className="p-3 text-center">Near Falls</th>
+                    <th className="p-3 text-right">Remove</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800 font-medium">
-                  {roster.map(w => {
-                    const st = computeStats(w.name);
-                    return (
-                      <tr key={w.id} className="hover:bg-slate-800/40 transition">
-                        <td className="p-3 font-bold text-white">
-                          {w.name}{" "}
-                          <span className="text-[10px] text-slate-500 uppercase ml-1">({w.grade})</span>
-                        </td>
-                        <td className="p-3 font-mono text-slate-300">{w.weight} lbs</td>
-                        <td className="p-3 font-mono font-bold text-amber-400">{st.record}</td>
-                        <td className="p-3 font-mono text-blue-400">{st.dualRecord}</td>
-                        <td className="p-3 font-mono text-purple-400">{st.tourneyRecord}</td>
-                        <td className="p-3 text-center font-mono font-bold text-rose-400">{st.falls}</td>
-                        <td className="p-3 text-center font-mono">{st.td}</td>
-                        <td className="p-3 text-center font-mono">{st.e}</td>
-                        <td className="p-3 text-center font-mono">{st.rev}</td>
-                        <td className="p-3 text-center font-mono">{st.nf}</td>
-                      </tr>
-                    );
-                  })}
+                  {roster.length === 0 ? (
+                    <tr>
+                      <td colSpan="11" className="p-6 text-center text-slate-500 italic">
+                        No wrestlers on the roster. Add one above!
+                      </td>
+                    </tr>
+                  ) : (
+                    roster.map(w => {
+                      const st = computeStats(w.name);
+                      return (
+                        <tr key={w.id} className="hover:bg-slate-800/40 transition">
+                          <td className="p-3 font-bold text-white">
+                            {w.name}{" "}
+                            <span className="text-[10px] text-slate-500 uppercase ml-1">({w.grade})</span>
+                          </td>
+                          <td className="p-3 font-mono text-slate-300">{w.weight} lbs</td>
+                          <td className="p-3 font-mono font-bold text-amber-400">{st.record}</td>
+                          <td className="p-3 font-mono text-blue-400">{st.dualRecord}</td>
+                          <td className="p-3 font-mono text-purple-400">{st.tourneyRecord}</td>
+                          <td className="p-3 text-center font-mono font-bold text-rose-400">{st.falls}</td>
+                          <td className="p-3 text-center font-mono">{st.td}</td>
+                          <td className="p-3 text-center font-mono">{st.e}</td>
+                          <td className="p-3 text-center font-mono">{st.rev}</td>
+                          <td className="p-3 text-center font-mono">{st.nf}</td>
+                          <td className="p-3 text-right">
+                            <button
+                              onClick={() => onRemoveWrestler(w.id, w.name)}
+                              title={`Remove ${w.name}`}
+                              className="px-2 py-1 bg-slate-800 hover:bg-rose-900 border border-slate-700 hover:border-rose-700 text-slate-400 hover:text-rose-200 rounded font-bold transition text-[11px]"
+                            >
+                              ✕
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
                 </tbody>
               </table>
             </div>
