@@ -32,7 +32,7 @@
   <script type="text/babel">
     const { useState, useEffect } = React;
 
-    // Gym Buzzer Audio Synthesizer
+    // Gym Buzzer Sound Synthesizer
     const playBuzzer = () => {
       try {
         const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -52,57 +52,70 @@
       }
     };
 
-    const INITIAL_ROSTER = [
+    const DEFAULT_ROSTER = [
       { id: "w1", name: "Marcus Vance", weight: "138", grade: "Sr" },
       { id: "w2", name: "Sam Cole", weight: "144", grade: "Jr" },
       { id: "w3", name: "David Ruiz", weight: "157", grade: "So" },
-      { id: "w4", name: "Tyler King", weight: "165", grade: "Sr" },
-      { id: "w5", name: "Jaden Brooks", weight: "175", grade: "Fr" }
-    ];
-
-    const INITIAL_MATCHES = [
-      {
-        id: "m1",
-        eventType: "dual",
-        eventName: "vs Oakridge High",
-        homeWrestler: "Marcus Vance",
-        opponentName: "J. Miller (Oakridge)",
-        weightClass: "138",
-        homeScore: 9,
-        awayScore: 2,
-        winner: "home",
-        winType: "Major Decision",
-        dualPointsAwarded: 4,
-        tourneyPointsAwarded: 0,
-        takedowns: 3,
-        escapes: 0,
-        reversals: 0,
-        nearfalls: 1,
-        date: "2026-01-14"
-      }
+      { id: "w4", name: "Tyler King", weight: "165", grade: "Sr" }
     ];
 
     function App() {
-      const [view, setView] = useState("scorer");
-      const [roster, setRoster] = useState(() => {
-        const saved = localStorage.getItem("mattrack_roster");
-        return saved ? JSON.parse(saved) : INITIAL_ROSTER;
-      });
-      const [matches, setMatches] = useState(() => {
-        const saved = localStorage.getItem("mattrack_matches");
-        return saved ? JSON.parse(saved) : INITIAL_MATCHES;
+      // Auth State
+      const [currentUser, setCurrentUser] = useState(() => {
+        return localStorage.getItem("mattrack_active_user") || null;
       });
 
-      // Match selected for editing in modal
+      // App Views
+      const [view, setView] = useState("scorer"); // 'scorer' | 'dual' | 'tournament' | 'roster'
+      const [roster, setRoster] = useState([]);
+      const [matches, setMatches] = useState([]);
       const [editingMatch, setEditingMatch] = useState(null);
 
+      // Load user-specific data when currentUser changes
       useEffect(() => {
-        localStorage.setItem("mattrack_roster", JSON.stringify(roster));
-      }, [roster]);
+        if (currentUser) {
+          const userKey = `mattrack_data_${currentUser.toLowerCase()}`;
+          const savedData = localStorage.getItem(userKey);
+          if (savedData) {
+            try {
+              const parsed = JSON.parse(savedData);
+              setRoster(parsed.roster || []);
+              setMatches(parsed.matches || []);
+            } catch (e) {
+              setRoster(DEFAULT_ROSTER);
+              setMatches([]);
+            }
+          } else {
+            // New user account initialize with template roster
+            setRoster(DEFAULT_ROSTER);
+            setMatches([]);
+          }
+          localStorage.setItem("mattrack_active_user", currentUser);
+        } else {
+          setRoster([]);
+          setMatches([]);
+          localStorage.removeItem("mattrack_active_user");
+        }
+      }, [currentUser]);
 
+      // Save user-isolated data on any mutation
       useEffect(() => {
-        localStorage.setItem("mattrack_matches", JSON.stringify(matches));
-      }, [matches]);
+        if (currentUser) {
+          const userKey = `mattrack_data_${currentUser.toLowerCase()}`;
+          localStorage.setItem(userKey, JSON.stringify({ roster, matches }));
+        }
+      }, [roster, matches, currentUser]);
+
+      const handleLogin = (username) => {
+        setCurrentUser(username);
+        setView("scorer");
+      };
+
+      const handleSignOut = () => {
+        if (confirm("Are you sure you want to sign out?")) {
+          setCurrentUser(null);
+        }
+      };
 
       const handleSaveMatch = (newMatch) => {
         setMatches([newMatch, ...matches]);
@@ -122,28 +135,34 @@
       };
 
       const handleRemoveWrestler = (id, name) => {
-        if (confirm(`Remove ${name} from the roster? Recorded match history will remain intact.`)) {
+        if (confirm(`Remove ${name} from the roster? Recorded matches will remain intact.`)) {
           setRoster(roster.filter(w => w.id !== id));
         }
       };
 
+      // If no authenticated user, display login/register screen
+      if (!currentUser) {
+        return <AuthScreen onLogin={handleLogin} />;
+      }
+
       return (
         <div className="flex flex-col h-screen overflow-hidden bg-slate-950 text-slate-100">
-          {/* Top Nav */}
-          <nav className="flex items-center justify-between px-5 py-3 bg-slate-900 border-b border-slate-800 shrink-0">
+          {/* Top Nav Bar */}
+          <nav className="flex items-center justify-between px-4 sm:px-6 py-2.5 bg-slate-900 border-b border-slate-800 shrink-0 gap-2">
             <div className="flex items-center gap-2">
-              <div className="bg-amber-500 text-black p-1.5 rounded-lg font-black tracking-tighter text-lg">
+              <div className="bg-amber-500 text-black p-1 rounded font-black text-sm tracking-tighter">
                 MT
               </div>
-              <span className="font-extrabold text-lg tracking-wider text-white hidden sm:inline">
+              <span className="font-extrabold text-base tracking-wider text-white hidden md:inline">
                 MAT<span className="text-amber-400">TRACK</span>
               </span>
             </div>
 
+            {/* Navigation Buttons */}
             <div className="flex bg-slate-800/90 rounded-xl p-1 gap-1 border border-slate-700/50">
               <button
                 onClick={() => setView("scorer")}
-                className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition ${
+                className={`px-3 py-1 rounded-lg text-xs font-bold transition ${
                   view === "scorer" ? "bg-amber-500 text-slate-950" : "text-slate-300 hover:text-white"
                 }`}
               >
@@ -151,7 +170,7 @@
               </button>
               <button
                 onClick={() => setView("dual")}
-                className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition ${
+                className={`px-3 py-1 rounded-lg text-xs font-bold transition ${
                   view === "dual" ? "bg-blue-600 text-white" : "text-slate-300 hover:text-white"
                 }`}
               >
@@ -159,7 +178,7 @@
               </button>
               <button
                 onClick={() => setView("tournament")}
-                className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition ${
+                className={`px-3 py-1 rounded-lg text-xs font-bold transition ${
                   view === "tournament" ? "bg-purple-600 text-white" : "text-slate-300 hover:text-white"
                 }`}
               >
@@ -167,15 +186,35 @@
               </button>
               <button
                 onClick={() => setView("roster")}
-                className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition ${
+                className={`px-3 py-1 rounded-lg text-xs font-bold transition ${
                   view === "roster" ? "bg-emerald-600 text-white" : "text-slate-300 hover:text-white"
                 }`}
               >
-                Roster & Stats
+                Roster
+              </button>
+            </div>
+
+            {/* User Account Capsule */}
+            <div className="flex items-center gap-2 bg-slate-800/60 border border-slate-700/60 rounded-xl px-2.5 py-1">
+              <div className="flex flex-col text-right">
+                <span className="text-[9px] text-slate-400 uppercase font-bold tracking-wider leading-none">
+                  Coach
+                </span>
+                <span className="text-xs font-black text-amber-400 leading-tight">
+                  {currentUser}
+                </span>
+              </div>
+              <button
+                onClick={handleSignOut}
+                title="Sign Out"
+                className="ml-1 p-1 bg-slate-700 hover:bg-rose-900 text-slate-300 hover:text-white rounded text-[10px] font-bold uppercase transition"
+              >
+                Log Out
               </button>
             </div>
           </nav>
 
+          {/* Active View */}
           <main className="flex-1 overflow-auto min-h-0">
             {view === "scorer" && (
               <LiveScorer roster={roster} onSaveMatch={handleSaveMatch} />
@@ -217,6 +256,138 @@
     }
 
     // =========================================================================
+    // COMPONENT: AUTH SCREEN (LOGIN & REGISTER)
+    // =========================================================================
+    function AuthScreen({ onLogin }) {
+      const [isRegistering, setIsRegistering] = useState(false);
+      const [username, setUsername] = useState("");
+      const [password, setPassword] = useState("");
+      const [error, setError] = useState("");
+
+      const getUsersDatabase = () => {
+        const raw = localStorage.getItem("mattrack_registered_users");
+        return raw ? JSON.parse(raw) : {};
+      };
+
+      const handleSubmit = (e) => {
+        e.preventDefault();
+        setError("");
+        const cleanUser = username.trim();
+
+        if (!cleanUser || !password) {
+          setError("Please enter both username and password.");
+          return;
+        }
+
+        const users = getUsersDatabase();
+        const userKey = cleanUser.toLowerCase();
+
+        if (isRegistering) {
+          if (users[userKey]) {
+            setError("That username is already taken. Please sign in instead.");
+            return;
+          }
+          // Register new user account
+          users[userKey] = { username: cleanUser, password: password };
+          localStorage.setItem("mattrack_registered_users", JSON.stringify(users));
+          onLogin(cleanUser);
+        } else {
+          // Signing In
+          if (!users[userKey] || users[userKey].password !== password) {
+            setError("Invalid username or password.");
+            return;
+          }
+          onLogin(users[userKey].username);
+        }
+      };
+
+      return (
+        <div className="min-h-screen bg-slate-950 flex flex-col justify-center items-center p-4">
+          <div className="w-full max-w-sm bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl">
+            <div className="text-center mb-6">
+              <div className="inline-flex bg-amber-500 text-black px-3 py-1 rounded-xl font-black text-xl tracking-tighter mb-2">
+                MT
+              </div>
+              <h1 className="text-2xl font-black text-white uppercase tracking-tight">
+                Mat<span className="text-amber-400">Track</span>
+              </h1>
+              <p className="text-xs text-slate-400 mt-1">
+                Wrestling Season Stats & Live Mat-Side Scoring
+              </p>
+            </div>
+
+            {error && (
+              <div className="mb-4 p-2.5 bg-rose-950/80 border border-rose-700/60 rounded-xl text-xs font-semibold text-rose-300 text-center">
+                {error}
+              </div>
+            )}
+
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <div>
+                <label className="block text-[11px] font-bold text-slate-400 uppercase mb-1">
+                  Coach / Team Username
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  placeholder="e.g. CoachSmith or GilroyWrestling"
+                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm font-semibold text-white focus:outline-none focus:border-amber-400"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-400 uppercase mb-1">
+                  Password
+                </label>
+                <input
+                  type="password"
+                  required
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••••"
+                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm font-semibold text-white focus:outline-none focus:border-amber-400"
+                />
+              </div>
+
+              <button
+                type="submit"
+                className="w-full py-3 bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-xl font-black text-sm uppercase tracking-wider transition active:scale-98 shadow-lg shadow-amber-500/20"
+              >
+                {isRegistering ? "Create Team Account" : "Sign In to Team"}
+              </button>
+            </form>
+
+            <div className="mt-6 pt-4 border-t border-slate-800/80 text-center text-xs">
+              {isRegistering ? (
+                <span className="text-slate-400">
+                  Already have an account?{" "}
+                  <button
+                    onClick={() => { setIsRegistering(false); setError(""); }}
+                    className="text-amber-400 font-bold hover:underline"
+                  >
+                    Sign In
+                  </button>
+                </span>
+              ) : (
+                <span className="text-slate-400">
+                  Need a separate team space?{" "}
+                  <button
+                    onClick={() => { setIsRegistering(true); setError(""); }}
+                    className="text-amber-400 font-bold hover:underline"
+                  >
+                    Create an Account
+                  </button>
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // =========================================================================
     // COMPONENT: LIVE SCORER
     // =========================================================================
     function LiveScorer({ roster, onSaveMatch }) {
@@ -237,6 +408,13 @@
       const [history, setHistory] = useState([]);
       const [isFinished, setIsFinished] = useState(false);
       const [finishType, setFinishType] = useState(null);
+
+      // Auto update home wrestler if roster updates
+      useEffect(() => {
+        if (roster.length > 0 && !roster.find(w => w.name === homeWrestler)) {
+          setHomeWrestler(roster[0].name);
+        }
+      }, [roster]);
 
       useEffect(() => {
         let interval = null;
@@ -383,7 +561,7 @@
 
       return (
         <div className="flex flex-col h-full bg-slate-950 p-2 sm:p-4 gap-3 select-none">
-          {/* Top Bar */}
+          {/* Controls Header */}
           <div className="flex flex-wrap items-center justify-between gap-2 bg-slate-900 border border-slate-800 p-3 rounded-2xl shrink-0">
             <div className="flex items-center gap-2">
               <select
@@ -416,7 +594,7 @@
               </div>
             </div>
 
-            {/* Master Clock */}
+            {/* Clock Cluster */}
             <div className="flex items-center gap-4">
               <div className="text-center">
                 <div className="text-[10px] uppercase tracking-widest text-slate-400 font-bold">
@@ -469,7 +647,7 @@
             </div>
           </div>
 
-          {/* Scoring Pads */}
+          {/* Scoring Mats */}
           <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-3 min-h-0">
             {/* GREEN / HOME CORNER */}
             <div className="flex flex-col bg-emerald-950/20 border-2 border-emerald-500/30 rounded-2xl p-3 sm:p-4 justify-between min-h-0">
@@ -656,7 +834,7 @@
             ))}
           </div>
 
-          {/* Completed Match Dialog */}
+          {/* Finished Match Dialog */}
           {isFinished && (
             <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
               <div className="bg-slate-900 border border-slate-700 p-6 rounded-2xl max-w-sm w-full text-center shadow-2xl">
@@ -724,7 +902,7 @@
     }
 
     // =========================================================================
-    // COMPONENT: DUAL MEETS VIEW (WITH EDIT BUTTON)
+    // COMPONENT: DUAL MEETS VIEW
     // =========================================================================
     function DualMeetsView({ matches, onEditMatch }) {
       const totalTeamPtsScored = matches.reduce((sum, m) => sum + (m.dualPointsAwarded || 0), 0);
@@ -825,7 +1003,7 @@
     }
 
     // =========================================================================
-    // COMPONENT: TOURNAMENTS VIEW (WITH EDIT BUTTON)
+    // COMPONENT: TOURNAMENTS VIEW
     // =========================================================================
     function TournamentsView({ matches, onEditMatch }) {
       const totalTourneyPts = matches.reduce((sum, m) => sum + (m.tourneyPointsAwarded || 0), 0);
@@ -926,7 +1104,7 @@
     }
 
     // =========================================================================
-    // COMPONENT: EDIT MATCH MODAL (ADJUST ANY STAT AFTER THE MATCH)
+    // COMPONENT: EDIT MATCH MODAL
     // =========================================================================
     function EditMatchModal({ match, roster, onSave, onDelete, onClose }) {
       const [formData, setFormData] = useState({ ...match });
@@ -1041,7 +1219,6 @@
                 />
               </div>
 
-              {/* Score & Result */}
               <div className="grid grid-cols-3 gap-3 bg-slate-800/60 p-3 rounded-xl border border-slate-800">
                 <div>
                   <label className="text-emerald-400 font-bold uppercase block mb-1 text-[11px]">Home Score</label>
@@ -1077,7 +1254,6 @@
                 </div>
               </div>
 
-              {/* Action Stat Adjustments */}
               <div className="bg-slate-800/40 p-3 rounded-xl border border-slate-800">
                 <span className="font-bold text-slate-400 uppercase text-[10px] block mb-2">
                   Adjust Recorded Action Tallies:
@@ -1122,7 +1298,6 @@
                 </div>
               </div>
 
-              {/* Action Buttons */}
               <div className="flex items-center justify-between pt-2">
                 <button
                   type="button"
@@ -1154,7 +1329,7 @@
     }
 
     // =========================================================================
-    // COMPONENT: ROSTER VIEW (WITH REMOVAL SUPPORT)
+    // COMPONENT: ROSTER VIEW
     // =========================================================================
     function RosterView({ roster, setRoster, matches, onRemoveWrestler }) {
       const [newName, setNewName] = useState("");
@@ -1213,7 +1388,6 @@
               </p>
             </div>
 
-            {/* Add Wrestler */}
             <form onSubmit={addWrestler} className="flex flex-wrap items-center gap-2 bg-slate-900 border border-slate-800 p-2 rounded-xl">
               <input
                 type="text"
@@ -1248,7 +1422,6 @@
             </form>
           </div>
 
-          {/* Roster Table */}
           <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs">
@@ -1271,7 +1444,7 @@
                   {roster.length === 0 ? (
                     <tr>
                       <td colSpan="11" className="p-6 text-center text-slate-500 italic">
-                        No wrestlers on the roster. Add one above!
+                        No wrestlers on this team roster yet. Add one above!
                       </td>
                     </tr>
                   ) : (
