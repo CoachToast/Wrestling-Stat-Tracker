@@ -140,7 +140,6 @@
 
       const handleSaveWrestlerEdit = (updatedWrestler, oldName) => {
         setRoster(roster.map(w => w.id === updatedWrestler.id ? updatedWrestler : w));
-        // Also update match history if name was changed
         if (oldName !== updatedWrestler.name) {
           setMatches(matches.map(m => {
             let mod = { ...m };
@@ -276,7 +275,6 @@
             )}
           </main>
 
-          {/* Modal: Timeline / Scoring Breakdown */}
           {viewingTimelineMatch && (
             <ScoringTimelineModal
               match={viewingTimelineMatch}
@@ -284,7 +282,6 @@
             />
           )}
 
-          {/* Modal: Edit Match Stats */}
           {editingMatch && (
             <EditMatchModal
               match={editingMatch}
@@ -295,7 +292,6 @@
             />
           )}
 
-          {/* Modal: Edit Wrestler Info */}
           {editingWrestler && (
             <EditWrestlerModal
               wrestler={editingWrestler}
@@ -431,17 +427,16 @@
     }
 
     // =========================================================================
-    // COMPONENT: LIVE SCORER (WITH WRESTLE-OFF SUPPORT)
+    // COMPONENT: LIVE SCORER (WITH DETAILED PENALTY MODAL)
     // =========================================================================
     function LiveScorer({ roster, onSaveMatch }) {
-      const [eventType, setEventType] = useState("dual"); // 'dual' | 'tournament' | 'wrestleoff'
+      const [eventType, setEventType] = useState("dual");
       const [eventName, setEventName] = useState("Dual vs Opponent");
       const [weightClass, setWeightClass] = useState("157");
       
       const [homeWrestler, setHomeWrestler] = useState(roster[0]?.name || "Home Wrestler");
       const [awayWrestler, setAwayWrestler] = useState(roster[1]?.name || "Opponent");
 
-      // Auto update wrestlers if roster changes
       useEffect(() => {
         if (roster.length > 0 && !roster.find(w => w.name === homeWrestler)) {
           setHomeWrestler(roster[0].name);
@@ -464,6 +459,9 @@
       const [history, setHistory] = useState([]);
       const [isFinished, setIsFinished] = useState(false);
       const [finishType, setFinishType] = useState(null);
+
+      // Penalty Dialog Picker State ('home' | 'away' | null)
+      const [penaltyTarget, setPenaltyTarget] = useState(null);
 
       useEffect(() => {
         let interval = null;
@@ -528,6 +526,12 @@
         setHistory([entry, ...history]);
       };
 
+      const awardPenalty = (awardedToSide, penaltyName) => {
+        // Point goes to awardedToSide because target committed the foul
+        addScore(awardedToSide, "PEN", 1, `Penalty: ${penaltyName}`);
+        setPenaltyTarget(null);
+      };
+
       const undo = () => {
         if (history.length === 0) return;
         const [last, ...rest] = history;
@@ -574,10 +578,11 @@
               if (item.code === "E") acc.e += 1;
               if (item.code === "REV") acc.rev += 1;
               if (item.code.startsWith("NF")) acc.nf += 1;
+              if (item.code === "PEN") acc.pen += 1;
             }
             return acc;
           },
-          { td: 0, e: 0, rev: 0, nf: 0 }
+          { td: 0, e: 0, rev: 0, nf: 0, pen: 0 }
         );
 
         const statsAway = history.reduce(
@@ -587,10 +592,11 @@
               if (item.code === "E") acc.e += 1;
               if (item.code === "REV") acc.rev += 1;
               if (item.code.startsWith("NF")) acc.nf += 1;
+              if (item.code === "PEN") acc.pen += 1;
             }
             return acc;
           },
-          { td: 0, e: 0, rev: 0, nf: 0 }
+          { td: 0, e: 0, rev: 0, nf: 0, pen: 0 }
         );
 
         const record = {
@@ -610,11 +616,13 @@
           escapes: statsHome.e,
           reversals: statsHome.rev,
           nearfalls: statsHome.nf,
+          penaltiesAwarded: statsHome.pen,
           awayTakedowns: statsAway.td,
           awayEscapes: statsAway.e,
           awayReversals: statsAway.rev,
           awayNearfalls: statsAway.nf,
-          history: [...history].reverse(), // store chronological from start to finish
+          awayPenaltiesAwarded: statsAway.pen,
+          history: [...history].reverse(),
           date: new Date().toISOString().split("T")[0]
         };
 
@@ -802,14 +810,14 @@
 
               <div className="flex gap-2">
                 <button
-                  onClick={() => addScore("home", "PEN", 1, "Penalty Point")}
-                  className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs rounded-lg uppercase"
+                  onClick={() => setPenaltyTarget("home")}
+                  className="flex-1 py-2.5 bg-amber-500/20 border border-amber-500/60 hover:bg-amber-500 hover:text-black text-amber-300 font-bold text-xs rounded-xl uppercase transition flex items-center justify-center gap-1"
                 >
-                  +1 Penalty
+                  <span>AWARD PENALTY ⚠️</span>
                 </button>
                 <button
                   onClick={() => finishMatch("home", "Fall")}
-                  className="flex-1 py-2 bg-emerald-500/20 border border-emerald-500 text-emerald-300 font-black text-xs rounded-lg uppercase hover:bg-emerald-500 hover:text-black transition"
+                  className="flex-1 py-2.5 bg-emerald-500/20 border border-emerald-500 text-emerald-300 font-black text-xs rounded-xl uppercase hover:bg-emerald-500 hover:text-black transition"
                 >
                   PIN / FALL ⚡
                 </button>
@@ -898,14 +906,14 @@
 
               <div className="flex gap-2">
                 <button
-                  onClick={() => addScore("away", "PEN", 1, "Penalty Point")}
-                  className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs rounded-lg uppercase"
+                  onClick={() => setPenaltyTarget("away")}
+                  className="flex-1 py-2.5 bg-amber-500/20 border border-amber-500/60 hover:bg-amber-500 hover:text-black text-amber-300 font-bold text-xs rounded-xl uppercase transition flex items-center justify-center gap-1"
                 >
-                  +1 Penalty
+                  <span>AWARD PENALTY ⚠️</span>
                 </button>
                 <button
                   onClick={() => finishMatch("away", "Fall")}
-                  className="flex-1 py-2 bg-rose-500/20 border border-rose-500 text-rose-300 font-black text-xs rounded-lg uppercase hover:bg-rose-500 hover:text-black transition"
+                  className="flex-1 py-2.5 bg-rose-500/20 border border-rose-500 text-rose-300 font-black text-xs rounded-xl uppercase hover:bg-rose-500 hover:text-black transition"
                 >
                   PIN / FALL ⚡
                 </button>
@@ -924,10 +932,63 @@
                   item.side === "home" ? "bg-emerald-950 text-emerald-300 border border-emerald-800" : "bg-rose-950 text-rose-300 border border-rose-800"
                 }`}
               >
-                {item.side === "home" ? "GRN" : "RED"} +{item.points} ({item.code}) P{item.period} [{item.timeFormatted}]
+                {item.side === "home" ? "GRN" : "RED"} +{item.points} ({item.description || item.code}) P{item.period} [{item.timeFormatted}]
               </span>
             ))}
           </div>
+
+          {/* PENALTY SELECTION MODAL */}
+          {penaltyTarget && (
+            <div className="fixed inset-0 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+              <div className="bg-slate-900 border border-amber-500/40 rounded-2xl max-w-sm w-full p-5 text-center shadow-2xl space-y-4">
+                <div className="text-3xl mb-1">⚠️</div>
+                <h3 className="text-lg font-black uppercase text-white tracking-wide">
+                  Award Penalty Point to {penaltyTarget === "home" ? "Green (Home)" : "Red (Away)"}
+                </h3>
+                <p className="text-xs text-slate-400">
+                  Select the specific infraction committed by {penaltyTarget === "home" ? awayWrestler : homeWrestler}:
+                </p>
+
+                <div className="grid grid-cols-1 gap-2 text-left">
+                  <button
+                    onClick={() => awardPenalty(penaltyTarget, "Locked Hands / Clasping")}
+                    className="p-3 bg-slate-800 hover:bg-amber-600 hover:text-black rounded-xl font-bold text-xs flex justify-between items-center transition"
+                  >
+                    <span>Locked Hands / Clasping</span>
+                    <span className="font-mono font-black">+1 PT</span>
+                  </button>
+                  <button
+                    onClick={() => awardPenalty(penaltyTarget, "Unnecessary Roughness")}
+                    className="p-3 bg-slate-800 hover:bg-amber-600 hover:text-black rounded-xl font-bold text-xs flex justify-between items-center transition"
+                  >
+                    <span>Unnecessary Roughness</span>
+                    <span className="font-mono font-black">+1 PT</span>
+                  </button>
+                  <button
+                    onClick={() => awardPenalty(penaltyTarget, "False Start / Caution Penalty")}
+                    className="p-3 bg-slate-800 hover:bg-amber-600 hover:text-black rounded-xl font-bold text-xs flex justify-between items-center transition"
+                  >
+                    <span>False Start / Caution Penalty</span>
+                    <span className="font-mono font-black">+1 PT</span>
+                  </button>
+                  <button
+                    onClick={() => awardPenalty(penaltyTarget, "Illegal Hold or Maneuver")}
+                    className="p-3 bg-slate-800 hover:bg-amber-600 hover:text-black rounded-xl font-bold text-xs flex justify-between items-center transition"
+                  >
+                    <span>Illegal Hold or Maneuver</span>
+                    <span className="font-mono font-black">+1 PT</span>
+                  </button>
+                </div>
+
+                <button
+                  onClick={() => setPenaltyTarget(null)}
+                  className="w-full py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl font-bold text-xs uppercase"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Finished Match Dialog */}
           {isFinished && (
@@ -1003,7 +1064,7 @@
     }
 
     // =========================================================================
-    // COMPONENT: MATCHES TABLE VIEW (WITH TIMELINE BUTTON)
+    // COMPONENT: MATCHES TABLE VIEW
     // =========================================================================
     function MatchesTableView({ title, subtitle, matches, onEditMatch, onViewTimeline, type }) {
       const totalTeamPts = matches.reduce((sum, m) => sum + (type === "dual" ? (m.dualPointsAwarded || 0) : (m.tourneyPointsAwarded || 0)), 0);
@@ -1112,7 +1173,7 @@
     }
 
     // =========================================================================
-    // MODAL: SCORING TIMELINE / BREAKDOWN (WHEN AND WHAT WAS SCORED)
+    // MODAL: SCORING TIMELINE / BREAKDOWN
     // =========================================================================
     function ScoringTimelineModal({ match, onClose }) {
       const history = match.history || [];
@@ -1134,50 +1195,54 @@
               </button>
             </div>
 
-            {/* Timeline Scrollable Body */}
             <div className="flex-1 overflow-y-auto space-y-2 pr-1">
               {history.length === 0 ? (
                 <div className="p-8 text-center text-slate-500 italic text-sm">
                   No chronological point log found for this match (action totals were entered directly).
                 </div>
               ) : (
-                history.map((event, idx) => (
-                  <div
-                    key={event.id || idx}
-                    className={`flex items-center justify-between p-2.5 rounded-xl border ${
-                      event.side === "home"
-                        ? "bg-emerald-950/40 border-emerald-800/60 text-emerald-300"
-                        : "bg-rose-950/40 border-rose-800/60 text-rose-300"
-                    }`}
-                  >
-                    <div className="flex items-center gap-2.5">
-                      <span className="w-6 h-6 rounded-full flex items-center justify-center font-black text-xs bg-slate-900 border border-slate-700 text-slate-300">
-                        {idx + 1}
-                      </span>
-                      <div>
-                        <div className="font-extrabold text-sm text-white">
-                          {event.side === "home" ? match.homeWrestler : match.opponentName}
-                        </div>
-                        <div className="text-xs opacity-80">
-                          {event.description || event.code} (+{event.points} pts)
+                history.map((event, idx) => {
+                  const isPenalty = event.code === "PEN";
+                  return (
+                    <div
+                      key={event.id || idx}
+                      className={`flex items-center justify-between p-2.5 rounded-xl border ${
+                        isPenalty
+                          ? "bg-amber-950/30 border-amber-700/60 text-amber-200"
+                          : event.side === "home"
+                          ? "bg-emerald-950/40 border-emerald-800/60 text-emerald-300"
+                          : "bg-rose-950/40 border-rose-800/60 text-rose-300"
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5">
+                        <span className="w-6 h-6 rounded-full flex items-center justify-center font-black text-xs bg-slate-900 border border-slate-700 text-slate-300">
+                          {idx + 1}
+                        </span>
+                        <div>
+                          <div className="font-extrabold text-sm text-white flex items-center gap-1.5">
+                            <span>{event.side === "home" ? match.homeWrestler : match.opponentName}</span>
+                            {isPenalty && <span className="text-amber-400 text-[10px] uppercase px-1 bg-amber-950 border border-amber-700 rounded">Infraction</span>}
+                          </div>
+                          <div className="text-xs opacity-90 font-medium">
+                            {event.description || event.code} (+{event.points} pts)
+                          </div>
                         </div>
                       </div>
-                    </div>
 
-                    <div className="text-right font-mono text-xs">
-                      <span className="bg-slate-900/80 px-2 py-1 rounded text-slate-300 font-bold">
-                        P{event.period} • {event.timeFormatted || `${event.seconds}s`}
-                      </span>
+                      <div className="text-right font-mono text-xs">
+                        <span className="bg-slate-900/80 px-2 py-1 rounded text-slate-300 font-bold">
+                          P{event.period} • {event.timeFormatted || `${event.seconds}s`}
+                        </span>
+                      </div>
                     </div>
-                  </div>
-                ))
+                  );
+                })
               )}
             </div>
 
-            {/* Summary Box */}
             <div className="mt-4 pt-3 border-t border-slate-800 flex items-center justify-between text-xs text-slate-400 shrink-0">
-              <span>Recorded Takedowns: <strong className="text-white">{match.takedowns || 0}</strong></span>
-              <span>Near Falls: <strong className="text-white">{match.nearfalls || 0}</strong></span>
+              <span>Takedowns: <strong className="text-white">{match.takedowns || 0}</strong></span>
+              <span>Penalties: <strong className="text-amber-400">{match.penaltiesAwarded || 0}</strong></span>
               <button
                 onClick={onClose}
                 className="px-4 py-1.5 bg-slate-800 hover:bg-slate-700 text-white rounded-lg font-bold"
@@ -1318,7 +1383,6 @@
                 )}
               </div>
 
-              {/* Score & Result */}
               <div className="grid grid-cols-3 gap-3 bg-slate-800/60 p-3 rounded-xl border border-slate-800">
                 <div>
                   <label className="text-emerald-400 font-bold uppercase block mb-1 text-[11px]">Home Score</label>
@@ -1354,7 +1418,6 @@
                 </div>
               </div>
 
-              {/* Action Stats */}
               <div className="bg-slate-800/40 p-3 rounded-xl border border-slate-800">
                 <span className="font-bold text-slate-400 uppercase text-[10px] block mb-2">
                   Adjust Recorded Action Tallies:
@@ -1430,7 +1493,7 @@
     }
 
     // =========================================================================
-    // MODAL: EDIT WRESTLER INFO (NAME, WEIGHT, GRADE)
+    // MODAL: EDIT WRESTLER INFO
     // =========================================================================
     function EditWrestlerModal({ wrestler, onSave, onClose }) {
       const [name, setName] = useState(wrestler.name);
@@ -1515,7 +1578,7 @@
     }
 
     // =========================================================================
-    // COMPONENT: ROSTER VIEW (WITH INTRASQUAD & EDIT CAPABILITY)
+    // COMPONENT: ROSTER VIEW
     // =========================================================================
     function RosterView({ roster, setRoster, matches, onRemoveWrestler, onEditWrestler }) {
       const [newName, setNewName] = useState("");
@@ -1537,7 +1600,6 @@
       };
 
       const computeStats = (wrestlerName) => {
-        // Individual wrestler match calculation (including wrestle-offs)
         let wins = 0;
         let losses = 0;
         let falls = 0;
@@ -1573,7 +1635,6 @@
               if (m.winner === "home") wrestleoffWins++;
             }
           } else if (m.eventType === "wrestleoff" && m.opponentName === wrestlerName) {
-            // Teammate wrestled as Red/Away
             if (m.winner === "away") wins++;
             else losses++;
             if (m.winner === "away" && m.winType === "Fall") falls++;
