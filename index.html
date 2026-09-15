@@ -59,8 +59,13 @@
     ];
 
     function App() {
+      // 1. Safe Auth State Initialization
       const [currentUser, setCurrentUser] = useState(() => {
-        return localStorage.getItem("mattrack_active_user") || null;
+        try {
+          return localStorage.getItem("mattrack_active_user") || null;
+        } catch (e) {
+          return null;
+        }
       });
 
       const [view, setView] = useState("scorer");
@@ -71,17 +76,14 @@
       const [viewingTimelineMatch, setViewingTimelineMatch] = useState(null);
       const [editingWrestler, setEditingWrestler] = useState(null);
 
-      // Shared directory of teams & rosters
       const [registeredTeamsDirectory, setRegisteredTeamsDirectory] = useState({});
 
       const refreshTeamsDirectory = () => {
-        const raw = localStorage.getItem("mattrack_public_rosters");
-        if (raw) {
-          try {
-            setRegisteredTeamsDirectory(JSON.parse(raw));
-          } catch (e) {
-            setRegisteredTeamsDirectory({});
-          }
+        try {
+          const raw = localStorage.getItem("mattrack_public_rosters");
+          if (raw) setRegisteredTeamsDirectory(JSON.parse(raw));
+        } catch (e) {
+          setRegisteredTeamsDirectory({});
         }
       };
 
@@ -89,37 +91,35 @@
         refreshTeamsDirectory();
       }, [view, currentUser]);
 
+      // 2. Load Active User's Partition Safely
       useEffect(() => {
-        if (currentUser) {
+        if (!currentUser) return;
+
+        try {
           const userKey = `mattrack_data_${currentUser.toLowerCase()}`;
           const savedData = localStorage.getItem(userKey);
           if (savedData) {
-            try {
-              const parsed = JSON.parse(savedData);
-              setRoster(parsed.roster || []);
-              setMatches(parsed.matches || []);
-              setTeamName(parsed.teamName || "Our Wrestling Team");
-            } catch (e) {
-              setRoster(DEFAULT_ROSTER);
-              setMatches([]);
-              setTeamName("Our Wrestling Team");
-            }
+            const parsed = JSON.parse(savedData);
+            setRoster(parsed.roster || []);
+            setMatches(parsed.matches || []);
+            setTeamName(parsed.teamName || "Our Wrestling Team");
           } else {
             setRoster(DEFAULT_ROSTER);
             setMatches([]);
             setTeamName("Our Wrestling Team");
           }
-          localStorage.setItem("mattrack_active_user", currentUser);
-        } else {
-          setRoster([]);
+        } catch (e) {
+          setRoster(DEFAULT_ROSTER);
           setMatches([]);
-          localStorage.removeItem("mattrack_active_user");
+          setTeamName("Our Wrestling Team");
         }
       }, [currentUser]);
 
-      // Save user-isolated data & publish team roster to global directory
+      // 3. Save User Partition ONLY When Logged In
       useEffect(() => {
-        if (currentUser) {
+        if (!currentUser) return;
+
+        try {
           const userKey = `mattrack_data_${currentUser.toLowerCase()}`;
           localStorage.setItem(userKey, JSON.stringify({ roster, matches, teamName }));
 
@@ -132,16 +132,34 @@
           };
           localStorage.setItem("mattrack_public_rosters", JSON.stringify(dir));
           setRegisteredTeamsDirectory(dir);
+        } catch (e) {
+          console.error("Storage save failed", e);
         }
       }, [roster, matches, teamName, currentUser]);
 
+      // 4. Robust Login & Sign Out Handlers
       const handleLogin = (username) => {
+        try {
+          localStorage.setItem("mattrack_active_user", username);
+        } catch (e) {}
         setCurrentUser(username);
         setView("scorer");
       };
 
       const handleSignOut = () => {
         if (confirm("Are you sure you want to sign out?")) {
+          // Synchronously clear active user key first
+          try {
+            localStorage.removeItem("mattrack_active_user");
+          } catch (e) {}
+          // Reset all active states to cleanly unmount
+          setEditingMatch(null);
+          setViewingTimelineMatch(null);
+          setEditingWrestler(null);
+          setRoster([]);
+          setMatches([]);
+          setTeamName("Our Wrestling Team");
+          setView("scorer");
           setCurrentUser(null);
         }
       };
@@ -192,25 +210,29 @@
         if (!confirm2) return;
 
         const userKey = currentUser.toLowerCase();
-        const raw = localStorage.getItem("mattrack_registered_users");
-        if (raw) {
-          const users = JSON.parse(raw);
-          delete users[userKey];
-          localStorage.setItem("mattrack_registered_users", JSON.stringify(users));
-        }
+        try {
+          const raw = localStorage.getItem("mattrack_registered_users");
+          if (raw) {
+            const users = JSON.parse(raw);
+            delete users[userKey];
+            localStorage.setItem("mattrack_registered_users", JSON.stringify(users));
+          }
 
-        const rawDir = localStorage.getItem("mattrack_public_rosters");
-        if (rawDir) {
-          const dir = JSON.parse(rawDir);
-          delete dir[`mattrack_data_${userKey}`];
-          localStorage.setItem("mattrack_public_rosters", JSON.stringify(dir));
-        }
+          const rawDir = localStorage.getItem("mattrack_public_rosters");
+          if (rawDir) {
+            const dir = JSON.parse(rawDir);
+            delete dir[`mattrack_data_${userKey}`];
+            localStorage.setItem("mattrack_public_rosters", JSON.stringify(dir));
+          }
 
-        localStorage.removeItem(`mattrack_data_${userKey}`);
-        localStorage.removeItem("mattrack_active_user");
+          localStorage.removeItem(`mattrack_data_${userKey}`);
+          localStorage.removeItem("mattrack_active_user");
+        } catch (e) {}
+
         setCurrentUser(null);
       };
 
+      // If user is logged out, render the authentication screen safely
       if (!currentUser) {
         return <AuthScreen onLogin={handleLogin} />;
       }
@@ -394,31 +416,490 @@
     }
 
     // =========================================================================
-    // COMPONENT: LIVE SCORER (WITH OPPOSING REGISTERED TEAM / ROSTER DROPDOWN)
+    // AUTHENTICATION SCREEN (LOGIN, REGISTER WITH EMAIL, FORGOT PASSWORD)
+    // =========================================================================
+    function AuthScreen({ onLogin }) {
+      const [mode, setMode] = useState("login");
+      const [username, setUsername] = useState("");
+      const [email, setEmail] = useState("");
+      const [password, setPassword] = useState("");
+
+      const [resetLookup, setResetLookup] = useState("");
+      const [matchedUserKey, setMatchedUserKey] = useState(null);
+      const [generatedCode, setGeneratedCode] = useState(null);
+      const [enteredCode, setEnteredCode] = useState("");
+      const [newPassword, setNewPassword] = useState("");
+      const [confirmNewPassword, setConfirmNewPassword] = useState("");
+
+      const [notification, setNotification] = useState(null);
+      const [error, setError] = useState("");
+
+      const getUsers = () => {
+        try {
+          const raw = localStorage.getItem("mattrack_registered_users");
+          return raw ? JSON.parse(raw) : {};
+        } catch (e) {
+          return {};
+        }
+      };
+
+      const handleLoginSubmit = (e) => {
+        e.preventDefault();
+        setError("");
+        const clean = username.trim();
+        if (!clean || !password) {
+          setError("Please enter both username and password.");
+          return;
+        }
+
+        const users = getUsers();
+        const key = clean.toLowerCase();
+
+        let matchedUser = users[key];
+        if (!matchedUser) {
+          const found = Object.values(users).find(u => u.email && u.email.toLowerCase() === key);
+          if (found) matchedUser = found;
+        }
+
+        if (!matchedUser || matchedUser.password !== password) {
+          setError("Invalid username/email or password.");
+          return;
+        }
+        onLogin(matchedUser.username);
+      };
+
+      const handleRegisterSubmit = (e) => {
+        e.preventDefault();
+        setError("");
+        const cleanUser = username.trim();
+        const cleanEmail = email.trim();
+
+        if (!cleanUser || !cleanEmail || !password) {
+          setError("Please fill out all fields.");
+          return;
+        }
+
+        const users = getUsers();
+        const key = cleanUser.toLowerCase();
+
+        if (users[key]) {
+          setError("That coach or team username is already registered.");
+          return;
+        }
+
+        const emailExists = Object.values(users).some(u => u.email && u.email.toLowerCase() === cleanEmail.toLowerCase());
+        if (emailExists) {
+          setError("An account is already registered with that email address.");
+          return;
+        }
+
+        users[key] = { username: cleanUser, email: cleanEmail, password };
+        try {
+          localStorage.setItem("mattrack_registered_users", JSON.stringify(users));
+        } catch (e) {}
+        onLogin(cleanUser);
+      };
+
+      const handleForgotRequestSubmit = (e) => {
+        e.preventDefault();
+        setError("");
+        setNotification(null);
+        const query = resetLookup.trim().toLowerCase();
+
+        if (!query) {
+          setError("Please enter your username or registered email.");
+          return;
+        }
+
+        const users = getUsers();
+        let targetKey = null;
+
+        if (users[query]) {
+          targetKey = query;
+        } else {
+          for (const k in users) {
+            if (users[k].email && users[k].email.toLowerCase() === query) {
+              targetKey = k;
+              break;
+            }
+          }
+        }
+
+        if (!targetKey) {
+          setError("No account was found matching that username or email address.");
+          return;
+        }
+
+        const targetUser = users[targetKey];
+        if (!targetUser.email) {
+          setError("This profile does not have a linked email address.");
+          return;
+        }
+
+        const code = Math.floor(100000 + Math.random() * 900000).toString();
+        setGeneratedCode(code);
+        setMatchedUserKey(targetKey);
+
+        setNotification({
+          type: "email_sent",
+          to: targetUser.email,
+          code: code
+        });
+        setMode("forgot_reset");
+      };
+
+      const handleResetPasswordSubmit = (e) => {
+        e.preventDefault();
+        setError("");
+
+        if (enteredCode.trim() !== generatedCode) {
+          setError("Invalid 6-digit verification code.");
+          return;
+        }
+
+        if (!newPassword || newPassword.length < 4) {
+          setError("Password must be at least 4 characters long.");
+          return;
+        }
+
+        if (newPassword !== confirmNewPassword) {
+          setError("Passwords do not match.");
+          return;
+        }
+
+        const users = getUsers();
+        if (users[matchedUserKey]) {
+          users[matchedUserKey].password = newPassword;
+          try {
+            localStorage.setItem("mattrack_registered_users", JSON.stringify(users));
+          } catch (e) {}
+          setNotification({
+            type: "success",
+            message: "Password updated! You can now sign in."
+          });
+          setMode("login");
+          setUsername(users[matchedUserKey].username);
+          setPassword("");
+          setEnteredCode("");
+          setNewPassword("");
+          setConfirmNewPassword("");
+        }
+      };
+
+      return (
+        <div className="min-h-screen bg-slate-950 flex flex-col justify-center items-center p-4">
+          <div className="w-full max-w-sm bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl">
+            <div className="text-center mb-5">
+              <div className="inline-flex bg-amber-500 text-black px-3 py-1 rounded-xl font-black text-xl tracking-tighter mb-2">
+                MT
+              </div>
+              <h1 className="text-2xl font-black text-white uppercase tracking-tight">
+                Mat<span className="text-amber-400">Track</span>
+              </h1>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Wrestling Season Stats & Team Manager
+              </p>
+            </div>
+
+            {notification && notification.type === "email_sent" && (
+              <div className="mb-4 p-3 bg-blue-950/80 border border-blue-600/70 rounded-2xl text-xs text-blue-200">
+                <div className="font-bold flex items-center gap-1 text-white">
+                  <span>✉️ Verification Code Dispatched</span>
+                </div>
+                <div className="mt-1 opacity-90">
+                  Code sent to: <strong className="text-white">{notification.to}</strong>
+                </div>
+                <div className="mt-2 p-2 bg-slate-900/90 rounded-lg border border-blue-500/40 text-center font-mono font-black text-base text-amber-300 tracking-widest">
+                  {notification.code}
+                </div>
+              </div>
+            )}
+
+            {notification && notification.type === "success" && (
+              <div className="mb-4 p-3 bg-emerald-950/80 border border-emerald-600/70 rounded-2xl text-xs text-emerald-200 text-center font-semibold">
+                {notification.message}
+              </div>
+            )}
+
+            {error && (
+              <div className="mb-4 p-2.5 bg-rose-950/80 border border-rose-700/60 rounded-xl text-xs font-semibold text-rose-300 text-center">
+                {error}
+              </div>
+            )}
+
+            {mode === "login" && (
+              <form onSubmit={handleLoginSubmit} className="space-y-4">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-400 uppercase mb-1">
+                    Coach Username or Email
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    placeholder="e.g. CoachSmith or smith@school.org"
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm font-semibold text-white focus:outline-none focus:border-amber-400"
+                  />
+                </div>
+
+                <div>
+                  <div className="flex justify-between items-center mb-1">
+                    <label className="text-[11px] font-bold text-slate-400 uppercase">
+                      Password
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => { setMode("forgot_request"); setError(""); setNotification(null); }}
+                      className="text-[11px] font-bold text-amber-400 hover:underline"
+                    >
+                      Forgot Password?
+                    </button>
+                  </div>
+                  <input
+                    type="password"
+                    required
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="••••••••"
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm font-semibold text-white focus:outline-none focus:border-amber-400"
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  className="w-full py-3 bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-xl font-black text-sm uppercase tracking-wider transition active:scale-98 shadow-lg shadow-amber-500/20"
+                >
+                  Sign In to Team
+                </button>
+              </form>
+            )}
+
+            {mode === "register" && (
+              <form onSubmit={handleRegisterSubmit} className="space-y-3.5">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-400 uppercase mb-1">
+                    Coach / Team Username
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    placeholder="e.g. CoachSmith"
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2 text-sm font-semibold text-white focus:outline-none focus:border-amber-400"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-400 uppercase mb-1">
+                    Connect Email Address
+                  </label>
+                  <input
+                    type="email"
+                    required
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="coach@school.edu"
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2 text-sm font-semibold text-white focus:outline-none focus:border-amber-400"
+                  />
+                  <span className="text-[10px] text-slate-500 block mt-0.5">
+                    Used for recovery & password reset verification.
+                  </span>
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-400 uppercase mb-1">
+                    Password
+                  </label>
+                  <input
+                    type="password"
+                    required
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="••••••••"
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2 text-sm font-semibold text-white focus:outline-none focus:border-amber-400"
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  className="w-full py-3 bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-xl font-black text-sm uppercase tracking-wider transition active:scale-98 shadow-lg shadow-amber-500/20"
+                >
+                  Create Team Account
+                </button>
+              </form>
+            )}
+
+            {mode === "forgot_request" && (
+              <form onSubmit={handleForgotRequestSubmit} className="space-y-4">
+                <div className="text-left">
+                  <h2 className="text-sm font-black uppercase text-white tracking-wide">
+                    Reset Account Password
+                  </h2>
+                  <p className="text-xs text-slate-400 mt-1">
+                    Enter the coach username or registered email address.
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-400 uppercase mb-1">
+                    Username or Email
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={resetLookup}
+                    onChange={(e) => setResetLookup(e.target.value)}
+                    placeholder="e.g. CoachSmith or email@domain.com"
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm font-semibold text-white focus:outline-none focus:border-amber-400"
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  className="w-full py-3 bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-xl font-black text-sm uppercase tracking-wider transition active:scale-98 shadow-lg shadow-amber-500/20"
+                >
+                  Send Verification Code ✉️
+                </button>
+
+                <div className="text-center pt-2">
+                  <button
+                    type="button"
+                    onClick={() => { setMode("login"); setError(""); setNotification(null); }}
+                    className="text-xs font-bold text-slate-400 hover:text-white"
+                  >
+                    ← Back to Sign In
+                  </button>
+                </div>
+              </form>
+            )}
+
+            {mode === "forgot_reset" && (
+              <form onSubmit={handleResetPasswordSubmit} className="space-y-3.5">
+                <div className="text-left">
+                  <h2 className="text-sm font-black uppercase text-white tracking-wide">
+                    Enter Verification Code
+                  </h2>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Enter the 6-digit code sent to your email, then choose a new password.
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-400 uppercase mb-1">
+                    6-Digit Verification Code
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    maxLength="6"
+                    value={enteredCode}
+                    onChange={(e) => setEnteredCode(e.target.value)}
+                    placeholder="123456"
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2 text-center text-lg font-mono font-black text-amber-400 focus:outline-none focus:border-amber-400 tracking-widest"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-400 uppercase mb-1">
+                    New Password
+                  </label>
+                  <input
+                    type="password"
+                    required
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    placeholder="••••••••"
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2 text-sm font-semibold text-white focus:outline-none focus:border-amber-400"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-400 uppercase mb-1">
+                    Confirm New Password
+                  </label>
+                  <input
+                    type="password"
+                    required
+                    value={confirmNewPassword}
+                    onChange={(e) => setConfirmNewPassword(e.target.value)}
+                    placeholder="••••••••"
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2 text-sm font-semibold text-white focus:outline-none focus:border-amber-400"
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  className="w-full py-3 bg-emerald-500 hover:bg-emerald-400 text-black rounded-xl font-black text-sm uppercase tracking-wider transition active:scale-98 shadow-lg shadow-emerald-500/20"
+                >
+                  Save & Update Password
+                </button>
+
+                <div className="text-center pt-1">
+                  <button
+                    type="button"
+                    onClick={() => { setMode("login"); setError(""); setNotification(null); }}
+                    className="text-xs font-bold text-slate-400 hover:text-white"
+                  >
+                    Cancel & Return to Sign In
+                  </button>
+                </div>
+              </form>
+            )}
+
+            {(mode === "login" || mode === "register") && (
+              <div className="mt-6 pt-4 border-t border-slate-800/80 text-center text-xs">
+                {mode === "register" ? (
+                  <span className="text-slate-400">
+                    Already have an account?{" "}
+                    <button
+                      onClick={() => { setMode("login"); setError(""); setNotification(null); }}
+                      className="text-amber-400 font-bold hover:underline"
+                    >
+                      Sign In
+                    </button>
+                  </span>
+                ) : (
+                  <span className="text-slate-400">
+                    Need a private team workspace?{" "}
+                    <button
+                      onClick={() => { setMode("register"); setError(""); setNotification(null); }}
+                      className="text-amber-400 font-bold hover:underline"
+                    >
+                      Create an Account
+                    </button>
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    // =========================================================================
+    // LIVE SCORER
     // =========================================================================
     function LiveScorer({ roster, onSaveMatch, teamName, currentUser, registeredTeamsDirectory }) {
       const [eventType, setEventType] = useState("dual");
       const [eventName, setEventName] = useState("Dual Meet");
       const [weightClass, setWeightClass] = useState("157");
 
-      // Opposing Team Selection State
       const [selectedOpponentTeamKey, setSelectedOpponentTeamKey] = useState("custom");
       const [customOpponentTeamName, setCustomOpponentTeamName] = useState("Opponent School");
 
       const [homeWrestler, setHomeWrestler] = useState(roster[0]?.name || "Home Wrestler");
       const [awayWrestler, setAwayWrestler] = useState("Opponent Wrestler");
 
-      // Filter other registered teams (exclude own current team)
-      const otherTeams = Object.entries(registeredTeamsDirectory || {}).filter(([key, data]) => {
+      const otherTeams = Object.entries(registeredTeamsDirectory || {}).filter(([key]) => {
         return key !== `mattrack_data_${currentUser.toLowerCase()}`;
       });
 
-      // Get current opponent roster based on selection
       const currentOpponentRoster = selectedOpponentTeamKey !== "custom" && registeredTeamsDirectory[selectedOpponentTeamKey]
         ? registeredTeamsDirectory[selectedOpponentTeamKey].roster || []
         : [];
 
-      // Update opponent wrestler selection when opposing team changes
       useEffect(() => {
         if (eventType === "dual" && selectedOpponentTeamKey !== "custom") {
           const oppTeam = registeredTeamsDirectory[selectedOpponentTeamKey];
@@ -807,7 +1288,6 @@
 
       return (
         <div className="flex flex-col h-full bg-slate-950 p-2 sm:p-3 gap-2 select-none">
-          {/* Header Bar */}
           <div className="flex flex-wrap items-center justify-between gap-2 bg-slate-900 border border-slate-800 p-2.5 rounded-2xl shrink-0">
             <div className="flex flex-wrap items-center gap-2">
               <select
@@ -836,10 +1316,9 @@
                 <option value="wrestleoff">Wrestle-Off</option>
               </select>
 
-              {/* In Dual Meet: Select Registered Opposing Team */}
               {eventType === "dual" && (
                 <div className="flex items-center gap-1 bg-slate-800 border border-slate-700 rounded-lg px-2 py-1">
-                  <span className="text-[10px] text-slate-400 font-bold uppercase">Opponent Team:</span>
+                  <span className="text-[10px] text-slate-400 font-bold uppercase">Opponent:</span>
                   <select
                     value={selectedOpponentTeamKey}
                     onChange={(e) => setSelectedOpponentTeamKey(e.target.value)}
@@ -855,7 +1334,6 @@
                 </div>
               )}
 
-              {/* Event or Opponent School Name input when custom */}
               {eventType === "dual" && selectedOpponentTeamKey === "custom" ? (
                 <input
                   type="text"
@@ -1104,7 +1582,6 @@
                     </span>
                   </div>
 
-                  {/* Wrestler Selection: Wrestle-Off Teammate OR Opposing Team Roster Dropdown */}
                   {eventType === "wrestleoff" ? (
                     <select
                       value={awayWrestler}
@@ -1451,7 +1928,7 @@
     }
 
     // =========================================================================
-    // COMPONENT: MATCHES TABLE VIEW
+    // MATCHES TABLE VIEW
     // =========================================================================
     function MatchesTableView({ title, subtitle, matches, onEditMatch, onViewTimeline, type, teamName }) {
       const totalTeamPts = matches.reduce((sum, m) => sum + (type === "dual" ? (m.dualPointsAwarded || 0) : (m.tourneyPointsAwarded || 0)), 0);
@@ -1562,7 +2039,7 @@
     }
 
     // =========================================================================
-    // MODAL: SCORING TIMELINE / BREAKDOWN
+    // SCORING TIMELINE MODAL
     // =========================================================================
     function ScoringTimelineModal({ match, onClose }) {
       const history = match.history || [];
@@ -1664,7 +2141,7 @@
     }
 
     // =========================================================================
-    // MODAL: EDIT MATCH
+    // EDIT MATCH MODAL
     // =========================================================================
     function EditMatchModal({ match, roster, onSave, onDelete, onClose }) {
       const [formData, setFormData] = useState({ ...match });
@@ -1902,7 +2379,7 @@
     }
 
     // =========================================================================
-    // MODAL: EDIT WRESTLER INFO
+    // EDIT WRESTLER MODAL
     // =========================================================================
     function EditWrestlerModal({ wrestler, onSave, onClose }) {
       const [name, setName] = useState(wrestler.name);
@@ -1987,12 +2464,16 @@
     }
 
     // =========================================================================
-    // COMPONENT: PROFILE VIEW
+    // PROFILE VIEW
     // =========================================================================
     function ProfileView({ currentUser, setCurrentUser, onDeleteAccount, teamName, setTeamName }) {
       const getUsers = () => {
-        const raw = localStorage.getItem("mattrack_registered_users");
-        return raw ? JSON.parse(raw) : {};
+        try {
+          const raw = localStorage.getItem("mattrack_registered_users");
+          return raw ? JSON.parse(raw) : {};
+        } catch (e) {
+          return {};
+        }
       };
 
       const users = getUsers();
@@ -2056,8 +2537,11 @@
           password: editPassword
         };
 
-        localStorage.setItem("mattrack_registered_users", JSON.stringify(users));
-        localStorage.setItem("mattrack_active_user", newUsername);
+        try {
+          localStorage.setItem("mattrack_registered_users", JSON.stringify(users));
+          localStorage.setItem("mattrack_active_user", newUsername);
+        } catch (e) {}
+
         setCurrentUser(newUsername);
         setTeamName(editTeamName.trim() || "Our Wrestling Team");
 
@@ -2204,7 +2688,7 @@
     }
 
     // =========================================================================
-    // COMPONENT: ROSTER VIEW
+    // ROSTER VIEW
     // =========================================================================
     function RosterView({ roster, setRoster, matches, onRemoveWrestler, onEditWrestler, teamName, setTeamName }) {
       const [newName, setNewName] = useState("");
