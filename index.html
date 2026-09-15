@@ -303,12 +303,24 @@
     }
 
     // =========================================================================
-    // AUTHENTICATION SCREEN
+    // AUTHENTICATION SCREEN (LOGIN, REGISTER WITH EMAIL, & FORGOT PASSWORD)
     // =========================================================================
     function AuthScreen({ onLogin }) {
-      const [isRegistering, setIsRegistering] = useState(false);
+      // mode: 'login' | 'register' | 'forgot_request' | 'forgot_reset'
+      const [mode, setMode] = useState("login");
       const [username, setUsername] = useState("");
+      const [email, setEmail] = useState("");
       const [password, setPassword] = useState("");
+
+      // Password Reset State
+      const [resetLookup, setResetLookup] = useState("");
+      const [matchedUserKey, setMatchedUserKey] = useState(null);
+      const [generatedCode, setGeneratedCode] = useState(null);
+      const [enteredCode, setEnteredCode] = useState("");
+      const [newPassword, setNewPassword] = useState("");
+      const [confirmNewPassword, setConfirmNewPassword] = useState("");
+
+      const [notification, setNotification] = useState(null);
       const [error, setError] = useState("");
 
       const getUsers = () => {
@@ -316,7 +328,7 @@
         return raw ? JSON.parse(raw) : {};
       };
 
-      const handleSubmit = (e) => {
+      const handleLoginSubmit = (e) => {
         e.preventDefault();
         setError("");
         const clean = username.trim();
@@ -328,98 +340,433 @@
         const users = getUsers();
         const key = clean.toLowerCase();
 
-        if (isRegistering) {
-          if (users[key]) {
-            setError("That team username is already registered. Please sign in.");
-            return;
-          }
-          users[key] = { username: clean, password };
-          localStorage.setItem("mattrack_registered_users", JSON.stringify(users));
-          onLogin(clean);
+        // Allow logging in by either username or connected email
+        let matchedUser = users[key];
+        if (!matchedUser) {
+          const found = Object.values(users).find(u => u.email && u.email.toLowerCase() === key);
+          if (found) matchedUser = found;
+        }
+
+        if (!matchedUser || matchedUser.password !== password) {
+          setError("Invalid username/email or password.");
+          return;
+        }
+        onLogin(matchedUser.username);
+      };
+
+      const handleRegisterSubmit = (e) => {
+        e.preventDefault();
+        setError("");
+        const cleanUser = username.trim();
+        const cleanEmail = email.trim();
+
+        if (!cleanUser || !cleanEmail || !password) {
+          setError("Please fill out all fields.");
+          return;
+        }
+
+        const users = getUsers();
+        const key = cleanUser.toLowerCase();
+
+        if (users[key]) {
+          setError("That coach or team username is already registered.");
+          return;
+        }
+
+        const emailExists = Object.values(users).some(u => u.email && u.email.toLowerCase() === cleanEmail.toLowerCase());
+        if (emailExists) {
+          setError("An account is already registered with that email address.");
+          return;
+        }
+
+        users[key] = { username: cleanUser, email: cleanEmail, password };
+        localStorage.setItem("mattrack_registered_users", JSON.stringify(users));
+        onLogin(cleanUser);
+      };
+
+      // Forgot Password Step 1: Search user & generate email reset token
+      const handleForgotRequestSubmit = (e) => {
+        e.preventDefault();
+        setError("");
+        setNotification(null);
+        const query = resetLookup.trim().toLowerCase();
+
+        if (!query) {
+          setError("Please enter your username or registered email.");
+          return;
+        }
+
+        const users = getUsers();
+        let targetKey = null;
+
+        if (users[query]) {
+          targetKey = query;
         } else {
-          if (!users[key] || users[key].password !== password) {
-            setError("Invalid username or password.");
-            return;
+          for (const k in users) {
+            if (users[k].email && users[k].email.toLowerCase() === query) {
+              targetKey = k;
+              break;
+            }
           }
-          onLogin(users[key].username);
+        }
+
+        if (!targetKey) {
+          setError("No account was found matching that username or email address.");
+          return;
+        }
+
+        const targetUser = users[targetKey];
+        if (!targetUser.email) {
+          setError("This legacy profile does not have a linked email address. Please contact your administrator.");
+          return;
+        }
+
+        // Generate 6-digit verification code
+        const code = Math.floor(100000 + Math.random() * 900000).toString();
+        setGeneratedCode(code);
+        setMatchedUserKey(targetKey);
+
+        // Display simulated email delivery
+        setNotification({
+          type: "email_sent",
+          to: targetUser.email,
+          code: code
+        });
+        setMode("forgot_reset");
+      };
+
+      // Forgot Password Step 2: Confirm code and change password
+      const handleResetPasswordSubmit = (e) => {
+        e.preventDefault();
+        setError("");
+
+        if (enteredCode.trim() !== generatedCode) {
+          setError("Invalid 6-digit verification code. Please check the code sent to your email.");
+          return;
+        }
+
+        if (!newPassword || newPassword.length < 4) {
+          setError("Password must be at least 4 characters long.");
+          return;
+        }
+
+        if (newPassword !== confirmNewPassword) {
+          setError("Passwords do not match.");
+          return;
+        }
+
+        const users = getUsers();
+        if (users[matchedUserKey]) {
+          users[matchedUserKey].password = newPassword;
+          localStorage.setItem("mattrack_registered_users", JSON.stringify(users));
+          setNotification({
+            type: "success",
+            message: "Password updated successfully! You can now sign in with your new password."
+          });
+          setMode("login");
+          setUsername(users[matchedUserKey].username);
+          setPassword("");
+          setEnteredCode("");
+          setNewPassword("");
+          setConfirmNewPassword("");
         }
       };
 
       return (
         <div className="min-h-screen bg-slate-950 flex flex-col justify-center items-center p-4">
           <div className="w-full max-w-sm bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl">
-            <div className="text-center mb-6">
+            <div className="text-center mb-5">
               <div className="inline-flex bg-amber-500 text-black px-3 py-1 rounded-xl font-black text-xl tracking-tighter mb-2">
                 MT
               </div>
               <h1 className="text-2xl font-black text-white uppercase tracking-tight">
                 Mat<span className="text-amber-400">Track</span>
               </h1>
-              <p className="text-xs text-slate-400 mt-1">
-                Wrestling Season Stats, Wrestle-Offs & Scoring
+              <p className="text-xs text-slate-400 mt-0.5">
+                Wrestling Season Stats & Team Manager
               </p>
             </div>
 
+            {/* Email Dispatch Notification Banner */}
+            {notification && notification.type === "email_sent" && (
+              <div className="mb-4 p-3 bg-blue-950/80 border border-blue-600/70 rounded-2xl text-xs text-blue-200">
+                <div className="font-bold flex items-center gap-1 text-white">
+                  <span>✉️ Email Sent</span>
+                </div>
+                <div className="mt-1 opacity-90">
+                  Password reset code dispatched to: <strong className="text-white">{notification.to}</strong>
+                </div>
+                <div className="mt-2 p-2 bg-slate-900/90 rounded-lg border border-blue-500/40 text-center font-mono font-black text-base text-amber-300 tracking-widest">
+                  {notification.code}
+                </div>
+              </div>
+            )}
+
+            {/* Success Message Banner */}
+            {notification && notification.type === "success" && (
+              <div className="mb-4 p-3 bg-emerald-950/80 border border-emerald-600/70 rounded-2xl text-xs text-emerald-200 text-center font-semibold">
+                {notification.message}
+              </div>
+            )}
+
+            {/* Error Banner */}
             {error && (
               <div className="mb-4 p-2.5 bg-rose-950/80 border border-rose-700/60 rounded-xl text-xs font-semibold text-rose-300 text-center">
                 {error}
               </div>
             )}
 
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <div>
-                <label className="block text-[11px] font-bold text-slate-400 uppercase mb-1">
-                  Coach / Team Username
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                  placeholder="e.g. CoachSmith"
-                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm font-semibold text-white focus:outline-none focus:border-amber-400"
-                />
-              </div>
+            {/* MODE: LOGIN */}
+            {mode === "login" && (
+              <form onSubmit={handleLoginSubmit} className="space-y-4">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-400 uppercase mb-1">
+                    Coach Username or Email
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    placeholder="e.g. CoachSmith or smith@school.org"
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm font-semibold text-white focus:outline-none focus:border-amber-400"
+                  />
+                </div>
 
-              <div>
-                <label className="block text-[11px] font-bold text-slate-400 uppercase mb-1">
-                  Password
-                </label>
-                <input
-                  type="password"
-                  required
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="••••••••"
-                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm font-semibold text-white focus:outline-none focus:border-amber-400"
-                />
-              </div>
+                <div>
+                  <div className="flex justify-between items-center mb-1">
+                    <label className="text-[11px] font-bold text-slate-400 uppercase">
+                      Password
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => { setMode("forgot_request"); setError(""); setNotification(null); }}
+                      className="text-[11px] font-bold text-amber-400 hover:underline"
+                    >
+                      Forgot Password?
+                    </button>
+                  </div>
+                  <input
+                    type="password"
+                    required
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="••••••••"
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm font-semibold text-white focus:outline-none focus:border-amber-400"
+                  />
+                </div>
 
-              <button
-                type="submit"
-                className="w-full py-3 bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-xl font-black text-sm uppercase tracking-wider transition active:scale-98 shadow-lg shadow-amber-500/20"
-              >
-                {isRegistering ? "Create Team Account" : "Sign In to Team"}
-              </button>
-            </form>
+                <button
+                  type="submit"
+                  className="w-full py-3 bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-xl font-black text-sm uppercase tracking-wider transition active:scale-98 shadow-lg shadow-amber-500/20"
+                >
+                  Sign In to Team
+                </button>
+              </form>
+            )}
 
-            <div className="mt-6 pt-4 border-t border-slate-800/80 text-center text-xs">
-              {isRegistering ? (
-                <span className="text-slate-400">
-                  Already have an account?{" "}
-                  <button onClick={() => { setIsRegistering(false); setError(""); }} className="text-amber-400 font-bold hover:underline">
-                    Sign In
+            {/* MODE: REGISTER (WITH EMAIL) */}
+            {mode === "register" && (
+              <form onSubmit={handleRegisterSubmit} className="space-y-3.5">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-400 uppercase mb-1">
+                    Coach / Team Username
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    placeholder="e.g. CoachSmith"
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2 text-sm font-semibold text-white focus:outline-none focus:border-amber-400"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-400 uppercase mb-1">
+                    Connect Email Address
+                  </label>
+                  <input
+                    type="email"
+                    required
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="coach@school.edu"
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2 text-sm font-semibold text-white focus:outline-none focus:border-amber-400"
+                  />
+                  <span className="text-[10px] text-slate-500 block mt-0.5">
+                    Used for team recovery and password reset verification.
+                  </span>
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-400 uppercase mb-1">
+                    Password
+                  </label>
+                  <input
+                    type="password"
+                    required
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="••••••••"
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2 text-sm font-semibold text-white focus:outline-none focus:border-amber-400"
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  className="w-full py-3 bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-xl font-black text-sm uppercase tracking-wider transition active:scale-98 shadow-lg shadow-amber-500/20"
+                >
+                  Create Team Account
+                </button>
+              </form>
+            )}
+
+            {/* MODE: FORGOT PASSWORD (STEP 1: REQUEST CODE) */}
+            {mode === "forgot_request" && (
+              <form onSubmit={handleForgotRequestSubmit} className="space-y-4">
+                <div className="text-left">
+                  <h2 className="text-sm font-black uppercase text-white tracking-wide">
+                    Reset Account Password
+                  </h2>
+                  <p className="text-xs text-slate-400 mt-1">
+                    Enter the coach username or the connected email address associated with your wrestling team.
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-400 uppercase mb-1">
+                    Username or Email
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={resetLookup}
+                    onChange={(e) => setResetLookup(e.target.value)}
+                    placeholder="e.g. CoachSmith or email@domain.com"
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm font-semibold text-white focus:outline-none focus:border-amber-400"
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  className="w-full py-3 bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-xl font-black text-sm uppercase tracking-wider transition active:scale-98 shadow-lg shadow-amber-500/20"
+                >
+                  Send Verification Code ✉️
+                </button>
+
+                <div className="text-center pt-2">
+                  <button
+                    type="button"
+                    onClick={() => { setMode("login"); setError(""); setNotification(null); }}
+                    className="text-xs font-bold text-slate-400 hover:text-white"
+                  >
+                    ← Back to Sign In
                   </button>
-                </span>
-              ) : (
-                <span className="text-slate-400">
-                  Need a private team workspace?{" "}
-                  <button onClick={() => { setIsRegistering(true); setError(""); }} className="text-amber-400 font-bold hover:underline">
-                    Create an Account
+                </div>
+              </form>
+            )}
+
+            {/* MODE: FORGOT PASSWORD (STEP 2: ENTER CODE & CHANGE PASSWORD) */}
+            {mode === "forgot_reset" && (
+              <form onSubmit={handleResetPasswordSubmit} className="space-y-3.5">
+                <div className="text-left">
+                  <h2 className="text-sm font-black uppercase text-white tracking-wide">
+                    Enter Verification Code
+                  </h2>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Enter the 6-digit code sent to your linked email, then choose a new password.
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-400 uppercase mb-1">
+                    6-Digit Verification Code
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    maxLength="6"
+                    value={enteredCode}
+                    onChange={(e) => setEnteredCode(e.target.value)}
+                    placeholder="123456"
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2 text-center text-lg font-mono font-black text-amber-400 focus:outline-none focus:border-amber-400 tracking-widest"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-400 uppercase mb-1">
+                    New Password
+                  </label>
+                  <input
+                    type="password"
+                    required
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    placeholder="••••••••"
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2 text-sm font-semibold text-white focus:outline-none focus:border-amber-400"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-400 uppercase mb-1">
+                    Confirm New Password
+                  </label>
+                  <input
+                    type="password"
+                    required
+                    value={confirmNewPassword}
+                    onChange={(e) => setConfirmNewPassword(e.target.value)}
+                    placeholder="••••••••"
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2 text-sm font-semibold text-white focus:outline-none focus:border-amber-400"
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  className="w-full py-3 bg-emerald-500 hover:bg-emerald-400 text-black rounded-xl font-black text-sm uppercase tracking-wider transition active:scale-98 shadow-lg shadow-emerald-500/20"
+                >
+                  Save & Update Password
+                </button>
+
+                <div className="text-center pt-1">
+                  <button
+                    type="button"
+                    onClick={() => { setMode("login"); setError(""); setNotification(null); }}
+                    className="text-xs font-bold text-slate-400 hover:text-white"
+                  >
+                    Cancel & Return to Sign In
                   </button>
-                </span>
-              )}
-            </div>
+                </div>
+              </form>
+            )}
+
+            {/* Auth Switcher Footer */}
+            {(mode === "login" || mode === "register") && (
+              <div className="mt-6 pt-4 border-t border-slate-800/80 text-center text-xs">
+                {mode === "register" ? (
+                  <span className="text-slate-400">
+                    Already have an account?{" "}
+                    <button
+                      onClick={() => { setMode("login"); setError(""); setNotification(null); }}
+                      className="text-amber-400 font-bold hover:underline"
+                    >
+                      Sign In
+                    </button>
+                  </span>
+                ) : (
+                  <span className="text-slate-400">
+                    Need a private team workspace?{" "}
+                    <button
+                      onClick={() => { setMode("register"); setError(""); setNotification(null); }}
+                      className="text-amber-400 font-bold hover:underline"
+                    >
+                      Create an Account
+                    </button>
+                  </span>
+                )}
+              </div>
+            )}
           </div>
         </div>
       );
@@ -446,7 +793,6 @@
       }, [roster, eventType]);
 
       // Clock & Round State
-      // Period stages: 1, 2, 3, 'SV-1', 'TB-1', 'TB-2', 'UTB'
       const [periodStage, setPeriodStage] = useState(1);
       const [secondsLeft, setSecondsLeft] = useState(120);
       const [isRunning, setIsRunning] = useState(false);
@@ -458,9 +804,9 @@
       const [deferredToP3Chooser, setDeferredToP3Chooser] = useState(null);
 
       // UTB Specific State
-      const [utbConfig, setUtbConfig] = useState(null); // { topWrestlerSide: 'home' | 'away' }
+      const [utbConfig, setUtbConfig] = useState(null);
 
-      // Caution Counters (First 2 are 0 points, 3rd+ is penalty point)
+      // Caution Counters (First 2 = 0 pts, 3rd+ = +1 pt)
       const [homeCautions, setHomeCautions] = useState(0);
       const [awayCautions, setAwayCautions] = useState(0);
 
@@ -474,7 +820,6 @@
       // Penalty Dialog
       const [penaltyTarget, setPenaltyTarget] = useState(null);
 
-      // Clock Timer Effect
       useEffect(() => {
         let interval = null;
         if (isRunning && secondsLeft > 0) {
@@ -487,25 +832,21 @@
         return () => clearInterval(interval);
       }, [isRunning, secondsLeft]);
 
-      // Sudden Victory / Tech Fall Watcher
       useEffect(() => {
         if (isFinished) return;
 
-        // Tech Fall Check (15 pts) in regular periods
         if ((periodStage === 1 || periodStage === 2 || periodStage === 3) && Math.abs(homeScore - awayScore) >= 15) {
           setIsRunning(false);
           finishMatch(homeScore > awayScore ? "home" : "away", "Tech Fall");
           return;
         }
 
-        // Sudden Victory Check: First score in SV-1 wins immediately
         if (periodStage === "SV-1" && homeScore !== awayScore) {
           setIsRunning(false);
           finishMatch(homeScore > awayScore ? "home" : "away", "Decision (SV-1)");
           return;
         }
 
-        // UTB Check: If wrestler on bottom scores an escape or reversal, they win immediately
         if (periodStage === "UTB" && utbConfig) {
           const bottomSide = utbConfig.topWrestlerSide === "home" ? "away" : "home";
           const lastAction = history[0];
@@ -517,7 +858,6 @@
         }
       }, [homeScore, awayScore, history, periodStage, utbConfig]);
 
-      // Logic when time expires in each period
       const handleClockZero = () => {
         if (periodStage === 1) {
           setChoiceModal({ stage: 2, chooser: "home" });
@@ -526,7 +866,6 @@
           setChoiceModal({ stage: 3, chooser: p3Chooser });
         } else if (periodStage === 3) {
           if (homeScore === awayScore) {
-            // Enter Overtime: Sudden Victory 1 (1:00 Neutral)
             setPeriodStage("SV-1");
             setSecondsLeft(60);
             logAction("SYS", "OT", 0, "Entering Sudden Victory 1 (1:00 Neutral - First score wins)");
@@ -535,21 +874,16 @@
             finishMatch(homeScore > awayScore ? "home" : "away", diff >= 8 ? "Major Decision" : "Decision");
           }
         } else if (periodStage === "SV-1") {
-          // Still tied after 1:00 SV-1 -> Go to Tiebreaker 1 (0:30)
           setChoiceModal({ stage: "TB-1", chooser: "home" });
         } else if (periodStage === "TB-1") {
-          // End of first 30s -> Go to Tiebreaker 2 (0:30)
           setChoiceModal({ stage: "TB-2", chooser: "away" });
         } else if (periodStage === "TB-2") {
           if (homeScore !== awayScore) {
-            // Someone took the lead in tiebreakers
             finishMatch(homeScore > awayScore ? "home" : "away", "Decision (TB)");
           } else {
-            // Still tied after TB-1 and TB-2 -> Go to Ultimate Tiebreaker (0:30 Rideout)
             initiateUTB();
           }
         } else if (periodStage === "UTB") {
-          // 30 seconds expired in UTB without bottom escaping -> Top wrestler wins by rideout!
           if (utbConfig) {
             const topSide = utbConfig.topWrestlerSide;
             logAction("SYS", "RIDEOUT", 0, `${topSide === "home" ? homeWrestler : awayWrestler} successfully rode out the 30s!`);
@@ -558,7 +892,6 @@
         }
       };
 
-      // Determine first scorer of the match for UTB choice
       const determineFirstScorer = () => {
         const chronological = [...history].reverse();
         for (const action of chronological) {
@@ -566,7 +899,7 @@
             return action.side;
           }
         }
-        return "home"; // default if 0-0 match
+        return "home";
       };
 
       const initiateUTB = () => {
@@ -588,7 +921,6 @@
         }
 
         if (stage === "UTB") {
-          // Ultimate Tiebreaker: choice of top or bottom
           const topSide = chosenPosition === "Top" ? chooserSide : (chooserSide === "home" ? "away" : "home");
           setUtbConfig({ topWrestlerSide: topSide });
           logAction("SYS", "UTB_START", 0, `Ultimate Tiebreaker (0:30): ${chooserName} chose ${chosenPosition}. Top: ${topSide === "home" ? homeWrestler : awayWrestler}`);
@@ -614,7 +946,6 @@
           return;
         }
 
-        // Standard Period 2 or 3
         logAction("SYS", "CHOICE", 0, `Period ${stage} Choice: ${chooserName} chose ${chosenPosition}`);
         setPeriodStage(stage);
         setSecondsLeft(120);
@@ -648,7 +979,6 @@
         logAction(side, code, points, description);
       };
 
-      // Caution / False Start Logic
       const handleCautionPenalty = (faultSide) => {
         const isHomeFault = faultSide === "home";
         const currentCount = isHomeFault ? homeCautions : awayCautions;
@@ -660,7 +990,6 @@
         else setAwayCautions(newCount);
 
         if (newCount <= 2) {
-          // Warning only: 0 Points
           logAction(
             faultSide,
             "CAUTION",
@@ -668,7 +997,6 @@
             `Caution #${newCount} (False Start): ${faultWrestler} [Warning - 0 pts]`
           );
         } else {
-          // 3rd or subsequent caution: +1 Penalty Point to opponent
           addScore(
             opponentSide,
             "PEN",
@@ -1248,7 +1576,7 @@
                   </div>
                 </div>
 
-                <div className={`grid ${choiceModal.stage.toString().includes("TB") ? "grid-cols-2" : "grid-cols-2"} gap-2.5 pt-1`}>
+                <div className="grid grid-cols-2 gap-2.5 pt-1">
                   <button
                     onClick={() => handleConfirmChoice("Top", choiceModal.chooser)}
                     className="p-3.5 bg-slate-800 hover:bg-emerald-600 hover:text-white rounded-xl font-black text-sm uppercase tracking-wider transition border border-slate-700"
@@ -1261,7 +1589,7 @@
                   >
                     BOTTOM (Defense)
                   </button>
-                  {!choiceModal.stage.toString().includes("TB") && (
+                  {!choiceModal.stage.toString().includes("TB") && choiceModal.stage !== "UTB" && (
                     <button
                       onClick={() => handleConfirmChoice("Neutral", choiceModal.chooser)}
                       className="p-3.5 bg-slate-800 hover:bg-emerald-600 hover:text-white rounded-xl font-black text-sm uppercase tracking-wider transition border border-slate-700"
@@ -1302,7 +1630,6 @@
                 </p>
 
                 <div className="grid grid-cols-1 gap-2 text-left">
-                  {/* False Start / Caution with 0-pt rule */}
                   <button
                     onClick={() => handleCautionPenalty(penaltyTarget === "home" ? "away" : "home")}
                     className="p-3 bg-slate-800 hover:bg-amber-600 hover:text-black rounded-xl font-bold text-xs flex justify-between items-center transition border border-slate-700"
