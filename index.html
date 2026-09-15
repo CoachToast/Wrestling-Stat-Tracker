@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
-  <title>MatTrack - Wrestling Stats & Mat-Side Scoring</title>
+  <title>MatTrack - Wrestling Stats & Team Manager</title>
   <!-- Tailwind CSS CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
   <!-- React and ReactDOM CDN -->
@@ -63,9 +63,10 @@
         return localStorage.getItem("mattrack_active_user") || null;
       });
 
-      const [view, setView] = useState("scorer");
+      const [view, setView] = useState("scorer"); // 'scorer' | 'dual' | 'tournament' | 'wrestleoff' | 'roster' | 'profile'
       const [roster, setRoster] = useState([]);
       const [matches, setMatches] = useState([]);
+      const [teamName, setTeamName] = useState("Our Wrestling Team");
       const [editingMatch, setEditingMatch] = useState(null);
       const [viewingTimelineMatch, setViewingTimelineMatch] = useState(null);
       const [editingWrestler, setEditingWrestler] = useState(null);
@@ -79,13 +80,16 @@
               const parsed = JSON.parse(savedData);
               setRoster(parsed.roster || []);
               setMatches(parsed.matches || []);
+              setTeamName(parsed.teamName || "Our Wrestling Team");
             } catch (e) {
               setRoster(DEFAULT_ROSTER);
               setMatches([]);
+              setTeamName("Our Wrestling Team");
             }
           } else {
             setRoster(DEFAULT_ROSTER);
             setMatches([]);
+            setTeamName("Our Wrestling Team");
           }
           localStorage.setItem("mattrack_active_user", currentUser);
         } else {
@@ -98,9 +102,9 @@
       useEffect(() => {
         if (currentUser) {
           const userKey = `mattrack_data_${currentUser.toLowerCase()}`;
-          localStorage.setItem(userKey, JSON.stringify({ roster, matches }));
+          localStorage.setItem(userKey, JSON.stringify({ roster, matches, teamName }));
         }
-      }, [roster, matches, currentUser]);
+      }, [roster, matches, teamName, currentUser]);
 
       const handleLogin = (username) => {
         setCurrentUser(username);
@@ -149,6 +153,24 @@
           }));
         }
         setEditingWrestler(null);
+      };
+
+      const handleDeleteAccount = () => {
+        if (!currentUser) return;
+        const confirm1 = confirm("WARNING: Are you sure you want to delete your entire profile and team account? This action cannot be undone.");
+        if (!confirm1) return;
+        const confirm2 = confirm("FINAL CONFIRMATION: All saved rosters, dual meets, tournaments, and scoring records will be permanently deleted.");
+        if (!confirm2) return;
+
+        const raw = localStorage.getItem("mattrack_registered_users");
+        if (raw) {
+          const users = JSON.parse(raw);
+          delete users[currentUser.toLowerCase()];
+          localStorage.setItem("mattrack_registered_users", JSON.stringify(users));
+        }
+        localStorage.removeItem(`mattrack_data_${currentUser.toLowerCase()}`);
+        localStorage.removeItem("mattrack_active_user");
+        setCurrentUser(null);
       };
 
       if (!currentUser) {
@@ -208,17 +230,28 @@
               >
                 Roster
               </button>
+              <button
+                onClick={() => setView("profile")}
+                className={`px-3 py-1 rounded-lg text-xs font-bold transition whitespace-nowrap ${
+                  view === "profile" ? "bg-indigo-600 text-white" : "text-slate-300 hover:text-white"
+                }`}
+              >
+                Profile ⚙️
+              </button>
             </div>
 
             <div className="flex items-center gap-2 bg-slate-800/60 border border-slate-700/60 rounded-xl px-2.5 py-1 shrink-0">
-              <div className="flex flex-col text-right">
+              <button
+                onClick={() => setView("profile")}
+                className="flex flex-col text-right hover:opacity-80 transition"
+              >
                 <span className="text-[9px] text-slate-400 uppercase font-bold tracking-wider leading-none">
                   Coach
                 </span>
                 <span className="text-xs font-black text-amber-400 leading-tight">
                   {currentUser}
                 </span>
-              </div>
+              </button>
               <button
                 onClick={handleSignOut}
                 title="Sign Out"
@@ -231,7 +264,7 @@
 
           <main className="flex-1 overflow-auto min-h-0">
             {view === "scorer" && (
-              <LiveScorer roster={roster} onSaveMatch={handleSaveMatch} />
+              <LiveScorer roster={roster} onSaveMatch={handleSaveMatch} teamName={teamName} />
             )}
             {view === "dual" && (
               <MatchesTableView
@@ -241,6 +274,7 @@
                 onEditMatch={setEditingMatch}
                 onViewTimeline={setViewingTimelineMatch}
                 type="dual"
+                teamName={teamName}
               />
             )}
             {view === "tournament" && (
@@ -251,6 +285,7 @@
                 onEditMatch={setEditingMatch}
                 onViewTimeline={setViewingTimelineMatch}
                 type="tournament"
+                teamName={teamName}
               />
             )}
             {view === "wrestleoff" && (
@@ -261,6 +296,7 @@
                 onEditMatch={setEditingMatch}
                 onViewTimeline={setViewingTimelineMatch}
                 type="wrestleoff"
+                teamName={teamName}
               />
             )}
             {view === "roster" && (
@@ -270,6 +306,17 @@
                 matches={matches}
                 onRemoveWrestler={handleRemoveWrestler}
                 onEditWrestler={setEditingWrestler}
+                teamName={teamName}
+                setTeamName={setTeamName}
+              />
+            )}
+            {view === "profile" && (
+              <ProfileView
+                currentUser={currentUser}
+                setCurrentUser={setCurrentUser}
+                onDeleteAccount={handleDeleteAccount}
+                teamName={teamName}
+                setTeamName={setTeamName}
               />
             )}
           </main>
@@ -303,16 +350,235 @@
     }
 
     // =========================================================================
-    // AUTHENTICATION SCREEN (LOGIN, REGISTER WITH EMAIL, & FORGOT PASSWORD)
+    // PROFILE MANAGEMENT VIEW (EDIT CREDENTIALS, TEAM NAME, DELETE ACCOUNT)
+    // =========================================================================
+    function ProfileView({ currentUser, setCurrentUser, onDeleteAccount, teamName, setTeamName }) {
+      const getUsers = () => {
+        const raw = localStorage.getItem("mattrack_registered_users");
+        return raw ? JSON.parse(raw) : {};
+      };
+
+      const users = getUsers();
+      const userKey = currentUser.toLowerCase();
+      const userData = users[userKey] || { username: currentUser, email: "", password: "" };
+
+      const [editUsername, setEditUsername] = useState(userData.username || currentUser);
+      const [editEmail, setEditEmail] = useState(userData.email || "");
+      const [editPassword, setEditPassword] = useState(userData.password || "");
+      const [confirmPassword, setConfirmPassword] = useState(userData.password || "");
+      const [editTeamName, setEditTeamName] = useState(teamName);
+
+      const [statusMessage, setStatusMessage] = useState(null);
+      const [errorMessage, setErrorMessage] = useState("");
+
+      const handleSaveProfile = (e) => {
+        e.preventDefault();
+        setStatusMessage(null);
+        setErrorMessage("");
+
+        const newUsername = editUsername.trim();
+        const newEmail = editEmail.trim();
+
+        if (!newUsername || !newEmail || !editPassword) {
+          setErrorMessage("All fields are required.");
+          return;
+        }
+
+        if (editPassword !== confirmPassword) {
+          setErrorMessage("Passwords do not match.");
+          return;
+        }
+
+        const newKey = newUsername.toLowerCase();
+        const currentKey = currentUser.toLowerCase();
+
+        // Check if new username conflicts with another account
+        if (newKey !== currentKey && users[newKey]) {
+          setErrorMessage("That username is already taken by another account.");
+          return;
+        }
+
+        // Check if email conflicts with another account
+        const emailConflict = Object.entries(users).some(([k, u]) => k !== currentKey && u.email && u.email.toLowerCase() === newEmail.toLowerCase());
+        if (emailConflict) {
+          setErrorMessage("That email is already registered to another account.");
+          return;
+        }
+
+        // If username changed, migrate match data in localStorage
+        if (newKey !== currentKey) {
+          const oldDataKey = `mattrack_data_${currentKey}`;
+          const existingData = localStorage.getItem(oldDataKey);
+          if (existingData) {
+            localStorage.setItem(`mattrack_data_${newKey}`, existingData);
+            localStorage.removeItem(oldDataKey);
+          }
+          delete users[currentKey];
+        }
+
+        users[newKey] = {
+          username: newUsername,
+          email: newEmail,
+          password: editPassword
+        };
+
+        localStorage.setItem("mattrack_registered_users", JSON.stringify(users));
+        localStorage.setItem("mattrack_active_user", newUsername);
+        setCurrentUser(newUsername);
+        setTeamName(editTeamName.trim() || "Our Wrestling Team");
+
+        setStatusMessage("Profile & team preferences updated successfully!");
+      };
+
+      return (
+        <div className="p-4 sm:p-6 max-w-3xl mx-auto space-y-6">
+          <div>
+            <h2 className="text-2xl font-black text-white uppercase tracking-tight">
+              Profile & Account Settings
+            </h2>
+            <p className="text-xs text-slate-400 mt-0.5">
+              Manage your coach login credentials, connected email, team name, and account data
+            </p>
+          </div>
+
+          {statusMessage && (
+            <div className="p-3 bg-emerald-950/80 border border-emerald-600/70 rounded-2xl text-xs text-emerald-200 text-center font-bold">
+              {statusMessage}
+            </div>
+          )}
+
+          {errorMessage && (
+            <div className="p-3 bg-rose-950/80 border border-rose-700/60 rounded-2xl text-xs font-semibold text-rose-300 text-center">
+              {errorMessage}
+            </div>
+          )}
+
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 sm:p-6 shadow-xl">
+            <form onSubmit={handleSaveProfile} className="space-y-4 text-xs">
+              <div className="border-b border-slate-800 pb-3">
+                <span className="text-[11px] font-bold text-amber-400 uppercase tracking-wider block mb-3">
+                  1. Team Configuration
+                </span>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-300 uppercase mb-1">
+                    Wrestling Team / School Name
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={editTeamName}
+                    onChange={(e) => setEditTeamName(e.target.value)}
+                    placeholder="e.g. Cougars Wrestling, Gilroy High"
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm font-semibold text-white focus:outline-none focus:border-amber-400"
+                  />
+                  <span className="text-[10px] text-slate-500 block mt-1">
+                    This name will appear on your Roster table, Dual Meet boards, and live score pads.
+                  </span>
+                </div>
+              </div>
+
+              <div className="border-b border-slate-800 pb-3">
+                <span className="text-[11px] font-bold text-amber-400 uppercase tracking-wider block mb-3">
+                  2. Coach Credentials & Security
+                </span>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-300 uppercase mb-1">
+                      Coach / Team Username
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={editUsername}
+                      onChange={(e) => setEditUsername(e.target.value)}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm font-semibold text-white focus:outline-none focus:border-amber-400"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-300 uppercase mb-1">
+                      Connected Recovery Email
+                    </label>
+                    <input
+                      type="email"
+                      required
+                      value={editEmail}
+                      onChange={(e) => setEditEmail(e.target.value)}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm font-semibold text-white focus:outline-none focus:border-amber-400"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-300 uppercase mb-1">
+                      New Password
+                    </label>
+                    <input
+                      type="password"
+                      required
+                      value={editPassword}
+                      onChange={(e) => setEditPassword(e.target.value)}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm font-semibold text-white focus:outline-none focus:border-amber-400"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-300 uppercase mb-1">
+                      Confirm New Password
+                    </label>
+                    <input
+                      type="password"
+                      required
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm font-semibold text-white focus:outline-none focus:border-amber-400"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex justify-end pt-2">
+                <button
+                  type="submit"
+                  className="px-6 py-2.5 bg-amber-500 hover:bg-amber-400 text-black font-black text-xs uppercase tracking-wider rounded-xl transition active:scale-95 shadow-lg shadow-amber-500/20"
+                >
+                  Save Profile Changes
+                </button>
+              </div>
+            </form>
+          </div>
+
+          {/* DANGER ZONE: DELETE ACCOUNT */}
+          <div className="bg-rose-950/20 border border-rose-800/50 rounded-2xl p-5 shadow-xl">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+              <div>
+                <h3 className="text-sm font-black text-rose-400 uppercase tracking-wide">
+                  Danger Zone: Delete Profile
+                </h3>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Permanently erase your coach profile, credentials, and all recorded wrestling stats.
+                </p>
+              </div>
+              <button
+                onClick={onDeleteAccount}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white font-black text-xs uppercase tracking-wider rounded-xl transition shrink-0"
+              >
+                Delete Account Entirely
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // =========================================================================
+    // AUTHENTICATION SCREEN
     // =========================================================================
     function AuthScreen({ onLogin }) {
-      // mode: 'login' | 'register' | 'forgot_request' | 'forgot_reset'
       const [mode, setMode] = useState("login");
       const [username, setUsername] = useState("");
       const [email, setEmail] = useState("");
       const [password, setPassword] = useState("");
 
-      // Password Reset State
       const [resetLookup, setResetLookup] = useState("");
       const [matchedUserKey, setMatchedUserKey] = useState(null);
       const [generatedCode, setGeneratedCode] = useState(null);
@@ -340,7 +606,6 @@
         const users = getUsers();
         const key = clean.toLowerCase();
 
-        // Allow logging in by either username or connected email
         let matchedUser = users[key];
         if (!matchedUser) {
           const found = Object.values(users).find(u => u.email && u.email.toLowerCase() === key);
@@ -384,7 +649,6 @@
         onLogin(cleanUser);
       };
 
-      // Forgot Password Step 1: Search user & generate email reset token
       const handleForgotRequestSubmit = (e) => {
         e.preventDefault();
         setError("");
@@ -421,12 +685,10 @@
           return;
         }
 
-        // Generate 6-digit verification code
         const code = Math.floor(100000 + Math.random() * 900000).toString();
         setGeneratedCode(code);
         setMatchedUserKey(targetKey);
 
-        // Display simulated email delivery
         setNotification({
           type: "email_sent",
           to: targetUser.email,
@@ -435,7 +697,6 @@
         setMode("forgot_reset");
       };
 
-      // Forgot Password Step 2: Confirm code and change password
       const handleResetPasswordSubmit = (e) => {
         e.preventDefault();
         setError("");
@@ -487,7 +748,6 @@
               </p>
             </div>
 
-            {/* Email Dispatch Notification Banner */}
             {notification && notification.type === "email_sent" && (
               <div className="mb-4 p-3 bg-blue-950/80 border border-blue-600/70 rounded-2xl text-xs text-blue-200">
                 <div className="font-bold flex items-center gap-1 text-white">
@@ -502,21 +762,18 @@
               </div>
             )}
 
-            {/* Success Message Banner */}
             {notification && notification.type === "success" && (
               <div className="mb-4 p-3 bg-emerald-950/80 border border-emerald-600/70 rounded-2xl text-xs text-emerald-200 text-center font-semibold">
                 {notification.message}
               </div>
             )}
 
-            {/* Error Banner */}
             {error && (
               <div className="mb-4 p-2.5 bg-rose-950/80 border border-rose-700/60 rounded-xl text-xs font-semibold text-rose-300 text-center">
                 {error}
               </div>
             )}
 
-            {/* MODE: LOGIN */}
             {mode === "login" && (
               <form onSubmit={handleLoginSubmit} className="space-y-4">
                 <div>
@@ -565,7 +822,6 @@
               </form>
             )}
 
-            {/* MODE: REGISTER (WITH EMAIL) */}
             {mode === "register" && (
               <form onSubmit={handleRegisterSubmit} className="space-y-3.5">
                 <div>
@@ -595,7 +851,7 @@
                     className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2 text-sm font-semibold text-white focus:outline-none focus:border-amber-400"
                   />
                   <span className="text-[10px] text-slate-500 block mt-0.5">
-                    Used for team recovery and password reset verification.
+                    Used for password reset & recovery.
                   </span>
                 </div>
 
@@ -622,7 +878,6 @@
               </form>
             )}
 
-            {/* MODE: FORGOT PASSWORD (STEP 1: REQUEST CODE) */}
             {mode === "forgot_request" && (
               <form onSubmit={handleForgotRequestSubmit} className="space-y-4">
                 <div className="text-left">
@@ -630,7 +885,7 @@
                     Reset Account Password
                   </h2>
                   <p className="text-xs text-slate-400 mt-1">
-                    Enter the coach username or the connected email address associated with your wrestling team.
+                    Enter the coach username or the connected email address.
                   </p>
                 </div>
 
@@ -667,7 +922,6 @@
               </form>
             )}
 
-            {/* MODE: FORGOT PASSWORD (STEP 2: ENTER CODE & CHANGE PASSWORD) */}
             {mode === "forgot_reset" && (
               <form onSubmit={handleResetPasswordSubmit} className="space-y-3.5">
                 <div className="text-left">
@@ -675,7 +929,7 @@
                     Enter Verification Code
                   </h2>
                   <p className="text-xs text-slate-400 mt-0.5">
-                    Enter the 6-digit code sent to your linked email, then choose a new password.
+                    Enter the 6-digit code sent to your linked email, then set a new password.
                   </p>
                 </div>
 
@@ -741,7 +995,6 @@
               </form>
             )}
 
-            {/* Auth Switcher Footer */}
             {(mode === "login" || mode === "register") && (
               <div className="mt-6 pt-4 border-t border-slate-800/80 text-center text-xs">
                 {mode === "register" ? (
@@ -773,9 +1026,9 @@
     }
 
     // =========================================================================
-    // COMPONENT: LIVE SCORER (WITH FULL OT PROGRESSION & CAUTION MECHANICS)
+    // COMPONENT: LIVE SCORER (USES DYNAMIC TEAM NAME)
     // =========================================================================
-    function LiveScorer({ roster, onSaveMatch }) {
+    function LiveScorer({ roster, onSaveMatch, teamName }) {
       const [eventType, setEventType] = useState("dual");
       const [eventName, setEventName] = useState("Dual vs Opponent");
       const [weightClass, setWeightClass] = useState("157");
@@ -792,32 +1045,25 @@
         }
       }, [roster, eventType]);
 
-      // Clock & Round State
       const [periodStage, setPeriodStage] = useState(1);
       const [secondsLeft, setSecondsLeft] = useState(120);
       const [isRunning, setIsRunning] = useState(false);
       const [isEditingClock, setIsEditingClock] = useState(false);
       const [manualClockInput, setManualClockInput] = useState("");
 
-      // Position Transitions & Choice Modals
       const [choiceModal, setChoiceModal] = useState(null);
       const [deferredToP3Chooser, setDeferredToP3Chooser] = useState(null);
-
-      // UTB Specific State
       const [utbConfig, setUtbConfig] = useState(null);
 
-      // Caution Counters (First 2 = 0 pts, 3rd+ = +1 pt)
       const [homeCautions, setHomeCautions] = useState(0);
       const [awayCautions, setAwayCautions] = useState(0);
 
-      // Score
       const [homeScore, setHomeScore] = useState(0);
       const [awayScore, setAwayScore] = useState(0);
       const [history, setHistory] = useState([]);
       const [isFinished, setIsFinished] = useState(false);
       const [finishType, setFinishType] = useState(null);
 
-      // Penalty Dialog
       const [penaltyTarget, setPenaltyTarget] = useState(null);
 
       useEffect(() => {
@@ -1113,6 +1359,7 @@
           id: "m_" + Date.now(),
           eventType,
           eventName: eventName || (eventType === "dual" ? "Dual Meet" : eventType === "tournament" ? "Tournament" : "Varsity Wrestle-Off"),
+          teamName,
           homeWrestler,
           opponentName: awayWrestler,
           weightClass,
@@ -1158,7 +1405,6 @@
 
       return (
         <div className="flex flex-col h-full bg-slate-950 p-2 sm:p-3 gap-2 select-none">
-          {/* Header Controls & Master Clock */}
           <div className="flex flex-wrap items-center justify-between gap-2 bg-slate-900 border border-slate-800 p-2.5 rounded-2xl shrink-0">
             <div className="flex items-center gap-2">
               <select
@@ -1320,8 +1566,8 @@
               <div className="flex items-center justify-between border-b border-emerald-800/40 pb-1.5">
                 <div className="flex-1 mr-2">
                   <div className="flex items-center gap-2">
-                    <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-widest">
-                      Green / {eventType === "wrestleoff" ? "Wrestler 1" : "Home"}
+                    <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-widest truncate">
+                      {eventType === "wrestleoff" ? "Wrestler 1" : teamName}
                     </span>
                     <span className="text-[10px] font-mono px-1.5 py-0.2 bg-slate-800 text-slate-300 rounded">
                       Cautions: {homeCautions}
@@ -1412,7 +1658,7 @@
               <div className="flex items-center justify-between border-b border-rose-800/40 pb-1.5">
                 <div className="flex-1 mr-2">
                   <div className="flex items-center gap-2">
-                    <span className="text-[10px] font-bold text-rose-400 uppercase tracking-widest">
+                    <span className="text-[10px] font-bold text-rose-400 uppercase tracking-widest truncate">
                       Red / {eventType === "wrestleoff" ? "Wrestler 2 (Teammate)" : "Opponent"}
                     </span>
                     <span className="text-[10px] font-mono px-1.5 py-0.2 bg-slate-800 text-slate-300 rounded">
@@ -1560,7 +1806,7 @@
                           : "bg-slate-800 border-slate-700 text-slate-400 hover:text-white"
                       }`}
                     >
-                      Green ({homeWrestler})
+                      {homeWrestler}
                     </button>
                     <button
                       type="button"
@@ -1571,12 +1817,12 @@
                           : "bg-slate-800 border-slate-700 text-slate-400 hover:text-white"
                       }`}
                     >
-                      Red ({awayWrestler})
+                      {awayWrestler}
                     </button>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-2.5 pt-1">
+                <div className={`grid ${choiceModal.stage.toString().includes("TB") ? "grid-cols-2" : "grid-cols-2"} gap-2.5 pt-1`}>
                   <button
                     onClick={() => handleConfirmChoice("Top", choiceModal.chooser)}
                     className="p-3.5 bg-slate-800 hover:bg-emerald-600 hover:text-white rounded-xl font-black text-sm uppercase tracking-wider transition border border-slate-700"
@@ -1754,7 +2000,7 @@
     // =========================================================================
     // COMPONENT: MATCHES TABLE VIEW
     // =========================================================================
-    function MatchesTableView({ title, subtitle, matches, onEditMatch, onViewTimeline, type }) {
+    function MatchesTableView({ title, subtitle, matches, onEditMatch, onViewTimeline, type, teamName }) {
       const totalTeamPts = matches.reduce((sum, m) => sum + (type === "dual" ? (m.dualPointsAwarded || 0) : (m.tourneyPointsAwarded || 0)), 0);
       const totalWins = matches.filter(m => m.winner === "home").length;
 
@@ -1793,7 +2039,7 @@
                     <th className="p-3">Date</th>
                     <th className="p-3">Event</th>
                     <th className="p-3">Weight</th>
-                    <th className="p-3">{type === "wrestleoff" ? "Wrestler 1" : "Our Wrestler"}</th>
+                    <th className="p-3">{type === "wrestleoff" ? "Wrestler 1" : teamName}</th>
                     <th className="p-3">{type === "wrestleoff" ? "Wrestler 2" : "Opponent"}</th>
                     <th className="p-3 text-center">Final Score</th>
                     <th className="p-3">Result</th>
@@ -2286,12 +2532,14 @@
     }
 
     // =========================================================================
-    // COMPONENT: ROSTER VIEW
+    // COMPONENT: ROSTER VIEW (WITH CUSTOM TEAM NAME)
     // =========================================================================
-    function RosterView({ roster, setRoster, matches, onRemoveWrestler, onEditWrestler }) {
+    function RosterView({ roster, setRoster, matches, onRemoveWrestler, onEditWrestler, teamName, setTeamName }) {
       const [newName, setNewName] = useState("");
       const [newWeight, setNewWeight] = useState("");
       const [newGrade, setNewGrade] = useState("Fr");
+      const [isEditingTeamName, setIsEditingTeamName] = useState(false);
+      const [tempTeamName, setTempTeamName] = useState(teamName);
 
       const addWrestler = (e) => {
         e.preventDefault();
@@ -2305,6 +2553,12 @@
         setRoster([...roster, entry]);
         setNewName("");
         setNewWeight("");
+      };
+
+      const handleSaveTeamName = (e) => {
+        e.preventDefault();
+        setTeamName(tempTeamName.trim() || "Our Wrestling Team");
+        setIsEditingTeamName(false);
       };
 
       const computeStats = (wrestlerName) => {
@@ -2373,11 +2627,40 @@
         <div className="p-4 sm:p-6 max-w-6xl mx-auto space-y-6">
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
             <div>
-              <h2 className="text-2xl font-black text-white uppercase tracking-tight">
-                Team Roster & Season Breakdown
-              </h2>
+              <div className="flex items-center gap-2">
+                {isEditingTeamName ? (
+                  <form onSubmit={handleSaveTeamName} className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={tempTeamName}
+                      onChange={(e) => setTempTeamName(e.target.value)}
+                      placeholder="Team Name"
+                      className="bg-slate-800 border border-amber-400 rounded-lg px-2.5 py-1 text-lg font-black text-white focus:outline-none"
+                    />
+                    <button type="submit" className="px-3 py-1 bg-amber-500 hover:bg-amber-400 text-black font-black text-xs rounded-lg uppercase">
+                      Save
+                    </button>
+                    <button type="button" onClick={() => setIsEditingTeamName(false)} className="px-2 py-1 text-xs text-slate-400">
+                      Cancel
+                    </button>
+                  </form>
+                ) : (
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-2xl font-black text-white uppercase tracking-tight">
+                      {teamName}
+                    </h2>
+                    <button
+                      onClick={() => { setTempTeamName(teamName); setIsEditingTeamName(true); }}
+                      title="Edit Team Name"
+                      className="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-2 py-0.5 rounded font-bold"
+                    >
+                      ✎ Edit Name
+                    </button>
+                  </div>
+                )}
+              </div>
               <p className="text-xs text-slate-400 mt-0.5">
-                Separated records across Dual Meets, Weekend Tournaments, and Intrasquad Wrestle-Offs
+                Official squad roster, team weights, and season record breakdowns
               </p>
             </div>
 
