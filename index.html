@@ -63,7 +63,7 @@
         return localStorage.getItem("mattrack_active_user") || null;
       });
 
-      const [view, setView] = useState("scorer"); // 'scorer' | 'dual' | 'tournament' | 'wrestleoff' | 'roster'
+      const [view, setView] = useState("scorer");
       const [roster, setRoster] = useState([]);
       const [matches, setMatches] = useState([]);
       const [editingMatch, setEditingMatch] = useState(null);
@@ -133,7 +133,7 @@
       };
 
       const handleRemoveWrestler = (id, name) => {
-        if (confirm(`Remove ${name} from the roster? Historical match records will remain intact.`)) {
+        if (confirm(`Remove ${name} from the roster? Historical records will remain intact.`)) {
           setRoster(roster.filter(w => w.id !== id));
         }
       };
@@ -157,7 +157,6 @@
 
       return (
         <div className="flex flex-col h-screen overflow-hidden bg-slate-950 text-slate-100">
-          {/* Top Bar */}
           <nav className="flex items-center justify-between px-3 sm:px-6 py-2 bg-slate-900 border-b border-slate-800 shrink-0 gap-2">
             <div className="flex items-center gap-2">
               <div className="bg-amber-500 text-black p-1 rounded font-black text-sm tracking-tighter">
@@ -304,7 +303,7 @@
     }
 
     // =========================================================================
-    // AUTHENTICATION
+    // AUTHENTICATION SCREEN
     // =========================================================================
     function AuthScreen({ onLogin }) {
       const [isRegistering, setIsRegistering] = useState(false);
@@ -427,7 +426,7 @@
     }
 
     // =========================================================================
-    // COMPONENT: LIVE SCORER
+    // COMPONENT: LIVE SCORER (WITH FULL OT PROGRESSION & CAUTION MECHANICS)
     // =========================================================================
     function LiveScorer({ roster, onSaveMatch }) {
       const [eventType, setEventType] = useState("dual");
@@ -446,18 +445,24 @@
         }
       }, [roster, eventType]);
 
-      // Clock
-      const PERIOD_LEN = 120;
-      const OT_LEN = 60;
-      const [period, setPeriod] = useState(1);
-      const [secondsLeft, setSecondsLeft] = useState(PERIOD_LEN);
+      // Clock & Round State
+      // Period stages: 1, 2, 3, 'SV-1', 'TB-1', 'TB-2', 'UTB'
+      const [periodStage, setPeriodStage] = useState(1);
+      const [secondsLeft, setSecondsLeft] = useState(120);
       const [isRunning, setIsRunning] = useState(false);
       const [isEditingClock, setIsEditingClock] = useState(false);
       const [manualClockInput, setManualClockInput] = useState("");
 
-      // Choice Transition State (1->2 or 2->3)
-      const [choiceModal, setChoiceModal] = useState(null); // { nextPeriod: 2 | 3, chooser: 'home' | 'away' }
+      // Position Transitions & Choice Modals
+      const [choiceModal, setChoiceModal] = useState(null);
       const [deferredToP3Chooser, setDeferredToP3Chooser] = useState(null);
+
+      // UTB Specific State
+      const [utbConfig, setUtbConfig] = useState(null); // { topWrestlerSide: 'home' | 'away' }
+
+      // Caution Counters (First 2 are 0 points, 3rd+ is penalty point)
+      const [homeCautions, setHomeCautions] = useState(0);
+      const [awayCautions, setAwayCautions] = useState(0);
 
       // Score
       const [homeScore, setHomeScore] = useState(0);
@@ -469,6 +474,7 @@
       // Penalty Dialog
       const [penaltyTarget, setPenaltyTarget] = useState(null);
 
+      // Clock Timer Effect
       useEffect(() => {
         let interval = null;
         if (isRunning && secondsLeft > 0) {
@@ -476,42 +482,100 @@
         } else if (secondsLeft === 0 && isRunning) {
           setIsRunning(false);
           playBuzzer();
-          initiatePeriodTransition();
+          handleClockZero();
         }
         return () => clearInterval(interval);
       }, [isRunning, secondsLeft]);
 
+      // Sudden Victory / Tech Fall Watcher
       useEffect(() => {
-        if (Math.abs(homeScore - awayScore) >= 15 && !isFinished) {
+        if (isFinished) return;
+
+        // Tech Fall Check (15 pts) in regular periods
+        if ((periodStage === 1 || periodStage === 2 || periodStage === 3) && Math.abs(homeScore - awayScore) >= 15) {
           setIsRunning(false);
           finishMatch(homeScore > awayScore ? "home" : "away", "Tech Fall");
+          return;
         }
-      }, [homeScore, awayScore]);
 
-      const initiatePeriodTransition = () => {
-        setIsRunning(false);
-        if (period === 1) {
-          setChoiceModal({ nextPeriod: 2, chooser: "home" });
-        } else if (period === 2) {
+        // Sudden Victory Check: First score in SV-1 wins immediately
+        if (periodStage === "SV-1" && homeScore !== awayScore) {
+          setIsRunning(false);
+          finishMatch(homeScore > awayScore ? "home" : "away", "Decision (SV-1)");
+          return;
+        }
+
+        // UTB Check: If wrestler on bottom scores an escape or reversal, they win immediately
+        if (periodStage === "UTB" && utbConfig) {
+          const bottomSide = utbConfig.topWrestlerSide === "home" ? "away" : "home";
+          const lastAction = history[0];
+          if (lastAction && lastAction.side === bottomSide && (lastAction.code === "E" || lastAction.code === "REV")) {
+            setIsRunning(false);
+            finishMatch(bottomSide, "Decision (UTB - Escape/Rev)");
+            return;
+          }
+        }
+      }, [homeScore, awayScore, history, periodStage, utbConfig]);
+
+      // Logic when time expires in each period
+      const handleClockZero = () => {
+        if (periodStage === 1) {
+          setChoiceModal({ stage: 2, chooser: "home" });
+        } else if (periodStage === 2) {
           const p3Chooser = deferredToP3Chooser || "away";
-          setChoiceModal({ nextPeriod: 3, chooser: p3Chooser });
-        } else if (period === 3) {
+          setChoiceModal({ stage: 3, chooser: p3Chooser });
+        } else if (periodStage === 3) {
           if (homeScore === awayScore) {
-            setPeriod("OT");
-            setSecondsLeft(OT_LEN);
-            logAction("SYS", "OT", 0, "Overtime Started: Sudden Victory (1:00 Neutral)");
+            // Enter Overtime: Sudden Victory 1 (1:00 Neutral)
+            setPeriodStage("SV-1");
+            setSecondsLeft(60);
+            logAction("SYS", "OT", 0, "Entering Sudden Victory 1 (1:00 Neutral - First score wins)");
           } else {
             const diff = Math.abs(homeScore - awayScore);
             finishMatch(homeScore > awayScore ? "home" : "away", diff >= 8 ? "Major Decision" : "Decision");
           }
-        } else if (period === "OT") {
-          const winner = homeScore >= awayScore ? "home" : "away";
-          finishMatch(winner, "Decision (OT)");
+        } else if (periodStage === "SV-1") {
+          // Still tied after 1:00 SV-1 -> Go to Tiebreaker 1 (0:30)
+          setChoiceModal({ stage: "TB-1", chooser: "home" });
+        } else if (periodStage === "TB-1") {
+          // End of first 30s -> Go to Tiebreaker 2 (0:30)
+          setChoiceModal({ stage: "TB-2", chooser: "away" });
+        } else if (periodStage === "TB-2") {
+          if (homeScore !== awayScore) {
+            // Someone took the lead in tiebreakers
+            finishMatch(homeScore > awayScore ? "home" : "away", "Decision (TB)");
+          } else {
+            // Still tied after TB-1 and TB-2 -> Go to Ultimate Tiebreaker (0:30 Rideout)
+            initiateUTB();
+          }
+        } else if (periodStage === "UTB") {
+          // 30 seconds expired in UTB without bottom escaping -> Top wrestler wins by rideout!
+          if (utbConfig) {
+            const topSide = utbConfig.topWrestlerSide;
+            logAction("SYS", "RIDEOUT", 0, `${topSide === "home" ? homeWrestler : awayWrestler} successfully rode out the 30s!`);
+            finishMatch(topSide, "Decision (UTB - Rideout)");
+          }
         }
       };
 
+      // Determine first scorer of the match for UTB choice
+      const determineFirstScorer = () => {
+        const chronological = [...history].reverse();
+        for (const action of chronological) {
+          if (action.points > 0 && (action.side === "home" || action.side === "away")) {
+            return action.side;
+          }
+        }
+        return "home"; // default if 0-0 match
+      };
+
+      const initiateUTB = () => {
+        const firstScorerSide = determineFirstScorer();
+        setChoiceModal({ stage: "UTB", chooser: firstScorerSide });
+      };
+
       const handleConfirmChoice = (chosenPosition, chooserSide) => {
-        const nextP = choiceModal.nextPeriod;
+        const stage = choiceModal.stage;
         const chooserName = chooserSide === "home" ? homeWrestler : awayWrestler;
 
         if (chosenPosition === "Defer") {
@@ -519,19 +583,41 @@
           const otherSide = chooserSide === "home" ? "away" : "home";
           const otherName = otherSide === "home" ? homeWrestler : awayWrestler;
           logAction("SYS", "CHOICE", 0, `${chooserName} Deferred. ${otherName}'s choice in Period 2.`);
-          setChoiceModal({ nextPeriod: 2, chooser: otherSide, isAfterDefer: true });
+          setChoiceModal({ stage: 2, chooser: otherSide, isAfterDefer: true });
           return;
         }
 
-        logAction(
-          "SYS",
-          "CHOICE",
-          0,
-          `Period ${nextP} Choice: ${chooserName} chose ${chosenPosition}`
-        );
+        if (stage === "UTB") {
+          // Ultimate Tiebreaker: choice of top or bottom
+          const topSide = chosenPosition === "Top" ? chooserSide : (chooserSide === "home" ? "away" : "home");
+          setUtbConfig({ topWrestlerSide: topSide });
+          logAction("SYS", "UTB_START", 0, `Ultimate Tiebreaker (0:30): ${chooserName} chose ${chosenPosition}. Top: ${topSide === "home" ? homeWrestler : awayWrestler}`);
+          setPeriodStage("UTB");
+          setSecondsLeft(30);
+          setChoiceModal(null);
+          return;
+        }
 
-        setPeriod(nextP);
-        setSecondsLeft(PERIOD_LEN);
+        if (stage === "TB-1") {
+          logAction("SYS", "TB1_START", 0, `Tiebreaker 1 (0:30): ${chooserName} chose ${chosenPosition}`);
+          setPeriodStage("TB-1");
+          setSecondsLeft(30);
+          setChoiceModal(null);
+          return;
+        }
+
+        if (stage === "TB-2") {
+          logAction("SYS", "TB2_START", 0, `Tiebreaker 2 (0:30): ${chooserName} chose ${chosenPosition}`);
+          setPeriodStage("TB-2");
+          setSecondsLeft(30);
+          setChoiceModal(null);
+          return;
+        }
+
+        // Standard Period 2 or 3
+        logAction("SYS", "CHOICE", 0, `Period ${stage} Choice: ${chooserName} chose ${chosenPosition}`);
+        setPeriodStage(stage);
+        setSecondsLeft(120);
         setChoiceModal(null);
       };
 
@@ -548,7 +634,7 @@
           code,
           points,
           description: description || code,
-          period,
+          period: periodStage,
           seconds: secondsLeft,
           timeFormatted: formatTime(secondsLeft)
         };
@@ -562,7 +648,38 @@
         logAction(side, code, points, description);
       };
 
-      const awardPenalty = (awardedToSide, penaltyName) => {
+      // Caution / False Start Logic
+      const handleCautionPenalty = (faultSide) => {
+        const isHomeFault = faultSide === "home";
+        const currentCount = isHomeFault ? homeCautions : awayCautions;
+        const newCount = currentCount + 1;
+        const faultWrestler = isHomeFault ? homeWrestler : awayWrestler;
+        const opponentSide = isHomeFault ? "away" : "home";
+
+        if (isHomeFault) setHomeCautions(newCount);
+        else setAwayCautions(newCount);
+
+        if (newCount <= 2) {
+          // Warning only: 0 Points
+          logAction(
+            faultSide,
+            "CAUTION",
+            0,
+            `Caution #${newCount} (False Start): ${faultWrestler} [Warning - 0 pts]`
+          );
+        } else {
+          // 3rd or subsequent caution: +1 Penalty Point to opponent
+          addScore(
+            opponentSide,
+            "PEN",
+            1,
+            `Penalty Point: Caution #${newCount} (False Start by ${faultWrestler})`
+          );
+        }
+        setPenaltyTarget(null);
+      };
+
+      const awardStandardPenalty = (awardedToSide, penaltyName) => {
         addScore(awardedToSide, "PEN", 1, `Penalty: ${penaltyName}`);
         setPenaltyTarget(null);
       };
@@ -593,13 +710,17 @@
         const [last, ...rest] = history;
         if (last.side === "home") setHomeScore(s => Math.max(0, s - last.points));
         if (last.side === "away") setAwayScore(s => Math.max(0, s - last.points));
+        if (last.code === "CAUTION") {
+          if (last.side === "home") setHomeCautions(c => Math.max(0, c - 1));
+          if (last.side === "away") setAwayCautions(c => Math.max(0, c - 1));
+        }
         setHistory(rest);
       };
 
       const resetMatch = () => {
         setIsRunning(false);
-        setPeriod(1);
-        setSecondsLeft(PERIOD_LEN);
+        setPeriodStage(1);
+        setSecondsLeft(120);
         setHomeScore(0);
         setAwayScore(0);
         setHistory([]);
@@ -607,6 +728,9 @@
         setFinishType(null);
         setChoiceModal(null);
         setDeferredToP3Chooser(null);
+        setUtbConfig(null);
+        setHomeCautions(0);
+        setAwayCautions(0);
       };
 
       const commitResult = () => {
@@ -675,11 +799,13 @@
           reversals: statsHome.rev,
           nearfalls: statsHome.nf,
           penaltiesAwarded: statsHome.pen,
+          homeCautions,
           awayTakedowns: statsAway.td,
           awayEscapes: statsAway.e,
           awayReversals: statsAway.rev,
           awayNearfalls: statsAway.nf,
           awayPenaltiesAwarded: statsAway.pen,
+          awayCautions,
           history: [...history].reverse(),
           date: new Date().toISOString().split("T")[0]
         };
@@ -692,6 +818,14 @@
         const m = Math.floor(s / 60);
         const sec = s % 60;
         return `${m}:${sec < 10 ? "0" : ""}${sec}`;
+      };
+
+      const renderPeriodLabel = () => {
+        if (periodStage === "SV-1") return "Sudden Victory (1:00)";
+        if (periodStage === "TB-1") return "Tiebreaker 1 (0:30)";
+        if (periodStage === "TB-2") return "Tiebreaker 2 (0:30)";
+        if (periodStage === "UTB") return "Ultimate Tiebreaker (Rideout)";
+        return `Period ${periodStage}`;
       };
 
       return (
@@ -742,28 +876,26 @@
 
             {/* Interactive Clock & Adjuster Bar */}
             <div className="flex items-center gap-3 bg-slate-950/60 border border-slate-800/80 px-3 py-1.5 rounded-xl">
-              {/* Minus Time Quick Buttons */}
               <div className="flex flex-col gap-1">
                 <button
                   onClick={() => adjustClock(-10)}
-                  title="Minus 10 seconds"
+                  title="Minus 10s"
                   className="px-1.5 py-0.5 bg-slate-800 hover:bg-slate-700 active:scale-95 text-[10px] font-mono font-bold rounded text-slate-300"
                 >
                   -10s
                 </button>
                 <button
                   onClick={() => adjustClock(-1)}
-                  title="Minus 1 second"
+                  title="Minus 1s"
                   className="px-1.5 py-0.5 bg-slate-800 hover:bg-slate-700 active:scale-95 text-[10px] font-mono font-bold rounded text-slate-300"
                 >
                   -1s
                 </button>
               </div>
 
-              {/* Main Period Clock Display & Manual Edit */}
-              <div className="text-center min-w-[100px]">
-                <div className="text-[10px] uppercase tracking-widest text-slate-400 font-bold">
-                  {period === "OT" ? "Overtime" : `Period ${period}`}
+              <div className="text-center min-w-[130px]">
+                <div className="text-[10px] uppercase tracking-widest text-amber-400 font-bold">
+                  {renderPeriodLabel()}
                 </div>
 
                 {isEditingClock ? (
@@ -796,25 +928,23 @@
                 <div className="text-[9px] text-slate-500 font-semibold tracking-tight">tap time to edit</div>
               </div>
 
-              {/* Plus Time Quick Buttons */}
               <div className="flex flex-col gap-1">
                 <button
                   onClick={() => adjustClock(10)}
-                  title="Plus 10 seconds"
+                  title="Plus 10s"
                   className="px-1.5 py-0.5 bg-slate-800 hover:bg-slate-700 active:scale-95 text-[10px] font-mono font-bold rounded text-slate-300"
                 >
                   +10s
                 </button>
                 <button
                   onClick={() => adjustClock(1)}
-                  title="Plus 1 second"
+                  title="Plus 1s"
                   className="px-1.5 py-0.5 bg-slate-800 hover:bg-slate-700 active:scale-95 text-[10px] font-mono font-bold rounded text-slate-300"
                 >
                   +1s
                 </button>
               </div>
 
-              {/* Play / Pause / Reset */}
               <div className="flex items-center gap-1.5 ml-2">
                 <button
                   onClick={() => setIsRunning(!isRunning)}
@@ -827,17 +957,16 @@
                 <button
                   onClick={() => {
                     setIsRunning(false);
-                    setSecondsLeft(period === "OT" ? OT_LEN : PERIOD_LEN);
+                    setSecondsLeft(periodStage === "SV-1" ? 60 : (periodStage.toString().includes("TB") ? 30 : 120));
                   }}
                   className="p-2 bg-slate-800 hover:bg-slate-700 rounded-xl text-slate-300 font-bold text-xs"
-                  title="Reset Period Clock"
+                  title="Reset Round Clock"
                 >
                   ↺
                 </button>
               </div>
             </div>
 
-            {/* Undo & Period Advance */}
             <div className="flex items-center gap-2">
               <button
                 onClick={undo}
@@ -847,7 +976,7 @@
                 Undo
               </button>
               <button
-                onClick={initiatePeriodTransition}
+                onClick={handleClockZero}
                 className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 rounded-lg text-xs font-bold text-slate-300 flex items-center gap-1"
               >
                 <span>End Period</span>
@@ -862,8 +991,13 @@
             <div className="flex flex-col bg-emerald-950/20 border-2 border-emerald-500/30 rounded-2xl p-3 justify-between min-h-0">
               <div className="flex items-center justify-between border-b border-emerald-800/40 pb-1.5">
                 <div className="flex-1 mr-2">
-                  <div className="text-[10px] font-bold text-emerald-400 uppercase tracking-widest">
-                    Green / {eventType === "wrestleoff" ? "Wrestler 1" : "Home"}
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-widest">
+                      Green / {eventType === "wrestleoff" ? "Wrestler 1" : "Home"}
+                    </span>
+                    <span className="text-[10px] font-mono px-1.5 py-0.2 bg-slate-800 text-slate-300 rounded">
+                      Cautions: {homeCautions}
+                    </span>
                   </div>
                   <select
                     value={homeWrestler}
@@ -949,8 +1083,13 @@
             <div className="flex flex-col bg-rose-950/20 border-2 border-rose-500/30 rounded-2xl p-3 justify-between min-h-0">
               <div className="flex items-center justify-between border-b border-rose-800/40 pb-1.5">
                 <div className="flex-1 mr-2">
-                  <div className="text-[10px] font-bold text-rose-400 uppercase tracking-widest">
-                    Red / {eventType === "wrestleoff" ? "Wrestler 2 (Teammate)" : "Opponent"}
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-bold text-rose-400 uppercase tracking-widest">
+                      Red / {eventType === "wrestleoff" ? "Wrestler 2 (Teammate)" : "Opponent"}
+                    </span>
+                    <span className="text-[10px] font-mono px-1.5 py-0.2 bg-slate-800 text-slate-300 rounded">
+                      Cautions: {awayCautions}
+                    </span>
                   </div>
                   {eventType === "wrestleoff" ? (
                     <select
@@ -1057,23 +1196,31 @@
                     : "bg-rose-950 text-rose-300 border border-rose-800"
                 }`}
               >
-                {item.side === "SYS" ? "POS" : item.side === "home" ? "GRN" : "RED"} {item.points > 0 ? `+${item.points} ` : ""}({item.description || item.code}) P{item.period} [{item.timeFormatted}]
+                {item.side === "SYS" ? "POS" : item.side === "home" ? "GRN" : "RED"} {item.points > 0 ? `+${item.points} ` : ""}({item.description || item.code}) [{item.period} @ {item.timeFormatted}]
               </span>
             ))}
           </div>
 
-          {/* PERIOD TRANSITION CHOICE MODAL (TOP, BOTTOM, NEUTRAL, DEFER) */}
+          {/* PERIOD & TIEBREAKER CHOICE MODAL */}
           {choiceModal && (
             <div className="fixed inset-0 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4 z-50">
               <div className="bg-slate-900 border border-slate-700 rounded-2xl max-w-md w-full p-6 text-center shadow-2xl space-y-4">
                 <div className="text-3xl mb-1">🤼‍♂️</div>
                 <h3 className="text-xl font-black uppercase text-white tracking-wide">
-                  Period {choiceModal.nextPeriod} Starting Position
+                  {choiceModal.stage === "UTB"
+                    ? "Ultimate Tiebreaker (Rideout Choice)"
+                    : choiceModal.stage === "TB-1"
+                    ? "Tiebreaker 1 Starting Position (0:30)"
+                    : choiceModal.stage === "TB-2"
+                    ? "Tiebreaker 2 Starting Position (0:30)"
+                    : `Period ${choiceModal.stage} Starting Position`}
                 </h3>
 
                 <div className="bg-slate-800/80 p-3 rounded-xl border border-slate-700">
                   <span className="text-xs text-slate-400 block mb-1 font-semibold uppercase">
-                    Wrestler with Choice:
+                    {choiceModal.stage === "UTB"
+                      ? "First Scorer with Rideout Choice:"
+                      : "Wrestler with Choice:"}
                   </span>
                   <div className="flex gap-2">
                     <button
@@ -1101,7 +1248,7 @@
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-2.5 pt-1">
+                <div className={`grid ${choiceModal.stage.toString().includes("TB") ? "grid-cols-2" : "grid-cols-2"} gap-2.5 pt-1`}>
                   <button
                     onClick={() => handleConfirmChoice("Top", choiceModal.chooser)}
                     className="p-3.5 bg-slate-800 hover:bg-emerald-600 hover:text-white rounded-xl font-black text-sm uppercase tracking-wider transition border border-slate-700"
@@ -1114,13 +1261,15 @@
                   >
                     BOTTOM (Defense)
                   </button>
-                  <button
-                    onClick={() => handleConfirmChoice("Neutral", choiceModal.chooser)}
-                    className="p-3.5 bg-slate-800 hover:bg-emerald-600 hover:text-white rounded-xl font-black text-sm uppercase tracking-wider transition border border-slate-700"
-                  >
-                    NEUTRAL (Feet)
-                  </button>
-                  {choiceModal.nextPeriod === 2 && !choiceModal.isAfterDefer && (
+                  {!choiceModal.stage.toString().includes("TB") && (
+                    <button
+                      onClick={() => handleConfirmChoice("Neutral", choiceModal.chooser)}
+                      className="p-3.5 bg-slate-800 hover:bg-emerald-600 hover:text-white rounded-xl font-black text-sm uppercase tracking-wider transition border border-slate-700"
+                    >
+                      NEUTRAL (Feet)
+                    </button>
+                  )}
+                  {choiceModal.stage === 2 && !choiceModal.isAfterDefer && (
                     <button
                       onClick={() => handleConfirmChoice("Defer", choiceModal.chooser)}
                       className="p-3.5 bg-slate-800 hover:bg-amber-600 hover:text-black rounded-xl font-black text-sm uppercase tracking-wider transition border border-slate-700"
@@ -1134,48 +1283,57 @@
                   onClick={() => setChoiceModal(null)}
                   className="text-xs text-slate-500 hover:text-slate-300 font-bold uppercase pt-2"
                 >
-                  Skip / Keep Current
+                  Cancel / Close
                 </button>
               </div>
             </div>
           )}
 
-          {/* PENALTY SELECTION MODAL */}
+          {/* PENALTY & CAUTION SELECTION MODAL */}
           {penaltyTarget && (
             <div className="fixed inset-0 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4 z-50">
               <div className="bg-slate-900 border border-amber-500/40 rounded-2xl max-w-sm w-full p-5 text-center shadow-2xl space-y-4">
                 <div className="text-3xl mb-1">⚠️</div>
                 <h3 className="text-lg font-black uppercase text-white tracking-wide">
-                  Award Penalty Point to {penaltyTarget === "home" ? "Green (Home)" : "Red (Away)"}
+                  Infraction on {penaltyTarget === "home" ? `Red (${awayWrestler})` : `Green (${homeWrestler})`}
                 </h3>
                 <p className="text-xs text-slate-400">
-                  Select the specific infraction committed by {penaltyTarget === "home" ? awayWrestler : homeWrestler}:
+                  Select the penalty or caution infraction committed:
                 </p>
 
                 <div className="grid grid-cols-1 gap-2 text-left">
+                  {/* False Start / Caution with 0-pt rule */}
                   <button
-                    onClick={() => awardPenalty(penaltyTarget, "Locked Hands / Clasping")}
+                    onClick={() => handleCautionPenalty(penaltyTarget === "home" ? "away" : "home")}
+                    className="p-3 bg-slate-800 hover:bg-amber-600 hover:text-black rounded-xl font-bold text-xs flex justify-between items-center transition border border-slate-700"
+                  >
+                    <div>
+                      <div className="font-bold">False Start / Caution</div>
+                      <div className="text-[10px] opacity-75 font-normal">
+                        Count: {(penaltyTarget === "home" ? awayCautions : homeCautions) + 1} • {((penaltyTarget === "home" ? awayCautions : homeCautions) + 1) <= 2 ? "Warning (0 pts)" : "+1 Penalty Point"}
+                      </div>
+                    </div>
+                    <span className="font-mono font-black">
+                      {((penaltyTarget === "home" ? awayCautions : homeCautions) + 1) <= 2 ? "0 PTS" : "+1 PT"}
+                    </span>
+                  </button>
+
+                  <button
+                    onClick={() => awardStandardPenalty(penaltyTarget, "Locked Hands / Clasping")}
                     className="p-3 bg-slate-800 hover:bg-amber-600 hover:text-black rounded-xl font-bold text-xs flex justify-between items-center transition"
                   >
                     <span>Locked Hands / Clasping</span>
                     <span className="font-mono font-black">+1 PT</span>
                   </button>
                   <button
-                    onClick={() => awardPenalty(penaltyTarget, "Unnecessary Roughness")}
+                    onClick={() => awardStandardPenalty(penaltyTarget, "Unnecessary Roughness")}
                     className="p-3 bg-slate-800 hover:bg-amber-600 hover:text-black rounded-xl font-bold text-xs flex justify-between items-center transition"
                   >
                     <span>Unnecessary Roughness</span>
                     <span className="font-mono font-black">+1 PT</span>
                   </button>
                   <button
-                    onClick={() => awardPenalty(penaltyTarget, "False Start / Caution Penalty")}
-                    className="p-3 bg-slate-800 hover:bg-amber-600 hover:text-black rounded-xl font-bold text-xs flex justify-between items-center transition"
-                  >
-                    <span>False Start / Caution Penalty</span>
-                    <span className="font-mono font-black">+1 PT</span>
-                  </button>
-                  <button
-                    onClick={() => awardPenalty(penaltyTarget, "Illegal Hold or Maneuver")}
+                    onClick={() => awardStandardPenalty(penaltyTarget, "Illegal Hold or Maneuver")}
                     className="p-3 bg-slate-800 hover:bg-amber-600 hover:text-black rounded-xl font-bold text-xs flex justify-between items-center transition"
                   >
                     <span>Illegal Hold or Maneuver</span>
@@ -1406,14 +1564,15 @@
               ) : (
                 history.map((event, idx) => {
                   const isPenalty = event.code === "PEN";
-                  const isPositionChoice = event.side === "SYS";
+                  const isCaution = event.code === "CAUTION";
+                  const isSys = event.side === "SYS";
                   return (
                     <div
                       key={event.id || idx}
                       className={`flex items-center justify-between p-2.5 rounded-xl border ${
-                        isPositionChoice
+                        isSys
                           ? "bg-slate-800/60 border-amber-600/50 text-amber-200"
-                          : isPenalty
+                          : isPenalty || isCaution
                           ? "bg-amber-950/30 border-amber-700/60 text-amber-200"
                           : event.side === "home"
                           ? "bg-emerald-950/40 border-emerald-800/60 text-emerald-300"
@@ -1427,15 +1586,20 @@
                         <div>
                           <div className="font-extrabold text-sm text-white flex items-center gap-1.5">
                             <span>
-                              {isPositionChoice
-                                ? "Position Transition"
+                              {isSys
+                                ? "System Event"
                                 : event.side === "home"
                                 ? match.homeWrestler
                                 : match.opponentName}
                             </span>
-                            {isPenalty && (
+                            {isCaution && (
                               <span className="text-amber-400 text-[10px] uppercase px-1 bg-amber-950 border border-amber-700 rounded">
-                                Infraction
+                                Caution
+                              </span>
+                            )}
+                            {isPenalty && (
+                              <span className="text-rose-400 text-[10px] uppercase px-1 bg-rose-950 border border-rose-700 rounded">
+                                Penalty Point
                               </span>
                             )}
                           </div>
@@ -1447,7 +1611,7 @@
 
                       <div className="text-right font-mono text-xs">
                         <span className="bg-slate-900/80 px-2 py-1 rounded text-slate-300 font-bold">
-                          P{event.period} • {event.timeFormatted || `${event.seconds}s`}
+                          {event.period} • {event.timeFormatted || `${event.seconds}s`}
                         </span>
                       </div>
                     </div>
@@ -1458,7 +1622,7 @@
 
             <div className="mt-4 pt-3 border-t border-slate-800 flex items-center justify-between text-xs text-slate-400 shrink-0">
               <span>Takedowns: <strong className="text-white">{match.takedowns || 0}</strong></span>
-              <span>Penalties: <strong className="text-amber-400">{match.penaltiesAwarded || 0}</strong></span>
+              <span>Cautions: <strong className="text-amber-400">{match.homeCautions || 0}</strong></span>
               <button
                 onClick={onClose}
                 className="px-4 py-1.5 bg-slate-800 hover:bg-slate-700 text-white rounded-lg font-bold"
@@ -1629,6 +1793,7 @@
                     <option value="Tech Fall">Tech Fall</option>
                     <option value="Major Decision">Major Decision</option>
                     <option value="Decision">Decision</option>
+                    <option value="Decision (OT)">Decision (OT)</option>
                     <option value="Forfeit">Forfeit</option>
                   </select>
                 </div>
