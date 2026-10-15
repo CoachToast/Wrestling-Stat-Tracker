@@ -59,7 +59,6 @@
     ];
 
     function App() {
-      // 1. Safe Auth State Initialization
       const [currentUser, setCurrentUser] = useState(() => {
         try {
           return localStorage.getItem("mattrack_active_user") || null;
@@ -91,10 +90,8 @@
         refreshTeamsDirectory();
       }, [view, currentUser]);
 
-      // 2. Load Active User's Partition Safely
       useEffect(() => {
         if (!currentUser) return;
-
         try {
           const userKey = `mattrack_data_${currentUser.toLowerCase()}`;
           const savedData = localStorage.getItem(userKey);
@@ -115,15 +112,12 @@
         }
       }, [currentUser]);
 
-      // 3. Save User Partition ONLY When Logged In
       useEffect(() => {
         if (!currentUser) return;
-
         try {
           const userKey = `mattrack_data_${currentUser.toLowerCase()}`;
           localStorage.setItem(userKey, JSON.stringify({ roster, matches, teamName }));
 
-          // Update shared directory
           const raw = localStorage.getItem("mattrack_public_rosters");
           let dir = raw ? JSON.parse(raw) : {};
           dir[userKey] = {
@@ -137,7 +131,6 @@
         }
       }, [roster, matches, teamName, currentUser]);
 
-      // 4. Robust Login & Sign Out Handlers
       const handleLogin = (username) => {
         try {
           localStorage.setItem("mattrack_active_user", username);
@@ -148,11 +141,9 @@
 
       const handleSignOut = () => {
         if (confirm("Are you sure you want to sign out?")) {
-          // Synchronously clear active user key first
           try {
             localStorage.removeItem("mattrack_active_user");
           } catch (e) {}
-          // Reset all active states to cleanly unmount
           setEditingMatch(null);
           setViewingTimelineMatch(null);
           setEditingWrestler(null);
@@ -232,7 +223,6 @@
         setCurrentUser(null);
       };
 
-      // If user is logged out, render the authentication screen safely
       if (!currentUser) {
         return <AuthScreen onLogin={handleLogin} />;
       }
@@ -416,7 +406,7 @@
     }
 
     // =========================================================================
-    // AUTHENTICATION SCREEN (LOGIN, REGISTER WITH EMAIL, FORGOT PASSWORD)
+    // AUTHENTICATION SCREEN
     // =========================================================================
     function AuthScreen({ onLogin }) {
       const [mode, setMode] = useState("login");
@@ -879,7 +869,7 @@
     }
 
     // =========================================================================
-    // LIVE SCORER
+    // LIVE SCORER (WITH STALLING PROGRESSION)
     // =========================================================================
     function LiveScorer({ roster, onSaveMatch, teamName, currentUser, registeredTeamsDirectory }) {
       const [eventType, setEventType] = useState("dual");
@@ -929,8 +919,13 @@
       const [deferredToP3Chooser, setDeferredToP3Chooser] = useState(null);
       const [utbConfig, setUtbConfig] = useState(null);
 
+      // Cautions
       const [homeCautions, setHomeCautions] = useState(0);
       const [awayCautions, setAwayCautions] = useState(0);
+
+      // Stalling Counts (Folkstyle: 1st=Warn 0pt, 2nd=+1, 3rd=+1, 4th=+2+Choice, 5th=DQ)
+      const [homeStalls, setHomeStalls] = useState(0);
+      const [awayStalls, setAwayStalls] = useState(0);
 
       const [homeScore, setHomeScore] = useState(0);
       const [awayScore, setAwayScore] = useState(0);
@@ -1099,6 +1094,7 @@
         logAction(side, code, points, description);
       };
 
+      // Caution / False Start Logic
       const handleCautionPenalty = (faultSide) => {
         const isHomeFault = faultSide === "home";
         const currentCount = isHomeFault ? homeCautions : awayCautions;
@@ -1123,6 +1119,56 @@
             1,
             `Penalty Point: Caution #${newCount} (False Start by ${faultWrestler})`
           );
+        }
+        setPenaltyTarget(null);
+      };
+
+      // Stalling Penalty Progression Logic (Folkstyle / NFHS)
+      const handleStallingPenalty = (faultSide) => {
+        const isHomeFault = faultSide === "home";
+        const currentCount = isHomeFault ? homeStalls : awayStalls;
+        const newCount = currentCount + 1;
+        const faultWrestler = isHomeFault ? homeWrestler : awayWrestler;
+        const opponentSide = isHomeFault ? "away" : "home";
+
+        if (isHomeFault) setHomeStalls(newCount);
+        else setAwayStalls(newCount);
+
+        if (newCount === 1) {
+          // 1st offense = Warning (0 pts)
+          logAction(
+            faultSide,
+            "STALL_WARN",
+            0,
+            `Stalling Warning #1: ${faultWrestler} [0 pts]`
+          );
+        } else if (newCount === 2 || newCount === 3) {
+          // 2nd & 3rd offense = +1 Penalty point
+          addScore(
+            opponentSide,
+            "STALL_PEN",
+            1,
+            `Penalty: Stalling #${newCount} on ${faultWrestler} (+1 pt)`
+          );
+        } else if (newCount === 4) {
+          // 4th offense = +2 Penalty points
+          addScore(
+            opponentSide,
+            "STALL_PEN",
+            2,
+            `Penalty: Stalling #4 on ${faultWrestler} (+2 pts)`
+          );
+        } else if (newCount >= 5) {
+          // 5th offense = Disqualification
+          logAction(
+            faultSide,
+            "STALL_DQ",
+            0,
+            `Disqualification: Stalling #5 on ${faultWrestler} (Match Terminated)`
+          );
+          setPenaltyTarget(null);
+          finishMatch(opponentSide, "Disqualification (Stalling)");
+          return;
         }
         setPenaltyTarget(null);
       };
@@ -1162,6 +1208,14 @@
           if (last.side === "home") setHomeCautions(c => Math.max(0, c - 1));
           if (last.side === "away") setAwayCautions(c => Math.max(0, c - 1));
         }
+        if (last.code.startsWith("STALL")) {
+          // Revert fault corner stall counter
+          const faultSide = (last.code === "STALL_WARN" || last.code === "STALL_DQ")
+            ? last.side
+            : (last.side === "home" ? "away" : "home");
+          if (faultSide === "home") setHomeStalls(c => Math.max(0, c - 1));
+          if (faultSide === "away") setAwayStalls(c => Math.max(0, c - 1));
+        }
         setHistory(rest);
       };
 
@@ -1179,6 +1233,8 @@
         setUtbConfig(null);
         setHomeCautions(0);
         setAwayCautions(0);
+        setHomeStalls(0);
+        setAwayStalls(0);
       };
 
       const commitResult = () => {
@@ -1187,7 +1243,7 @@
 
         let dualPts = 0;
         if (eventType === "dual" && isHomeWinner) {
-          if (finishType === "Fall" || finishType === "Forfeit") dualPts = 6;
+          if (finishType === "Fall" || finishType === "Forfeit" || finishType.includes("Disqualification")) dualPts = 6;
           else if (finishType === "Tech Fall") dualPts = 5;
           else if (finishType === "Major Decision") dualPts = 4;
           else dualPts = 3;
@@ -1196,7 +1252,7 @@
         let tourneyPts = 0;
         if (eventType === "tournament" && isHomeWinner) {
           tourneyPts = 2;
-          if (finishType === "Fall") tourneyPts += 2;
+          if (finishType === "Fall" || finishType.includes("Disqualification")) tourneyPts += 2;
           else if (finishType === "Tech Fall") tourneyPts += 1.5;
           else if (finishType === "Major Decision") tourneyPts += 1;
         }
@@ -1208,7 +1264,7 @@
               if (item.code === "E") acc.e += 1;
               if (item.code === "REV") acc.rev += 1;
               if (item.code.startsWith("NF")) acc.nf += 1;
-              if (item.code === "PEN") acc.pen += 1;
+              if (item.code === "PEN" || item.code === "STALL_PEN") acc.pen += 1;
             }
             return acc;
           },
@@ -1222,7 +1278,7 @@
               if (item.code === "E") acc.e += 1;
               if (item.code === "REV") acc.rev += 1;
               if (item.code.startsWith("NF")) acc.nf += 1;
-              if (item.code === "PEN") acc.pen += 1;
+              if (item.code === "PEN" || item.code === "STALL_PEN") acc.pen += 1;
             }
             return acc;
           },
@@ -1254,12 +1310,14 @@
           nearfalls: statsHome.nf,
           penaltiesAwarded: statsHome.pen,
           homeCautions,
+          homeStalls,
           awayTakedowns: statsAway.td,
           awayEscapes: statsAway.e,
           awayReversals: statsAway.rev,
           awayNearfalls: statsAway.nf,
           awayPenaltiesAwarded: statsAway.pen,
           awayCautions,
+          awayStalls,
           history: [...history].reverse(),
           date: new Date().toISOString().split("T")[0]
         };
@@ -1285,6 +1343,16 @@
       const currentOpponentSchoolLabel = eventType === "dual" && selectedOpponentTeamKey !== "custom" && registeredTeamsDirectory[selectedOpponentTeamKey]
         ? registeredTeamsDirectory[selectedOpponentTeamKey].teamName
         : customOpponentTeamName;
+
+      // Calculate upcoming stall points for target corner
+      const getNextStallLabel = (side) => {
+        const nextCount = (side === "home" ? homeStalls : awayStalls) + 1;
+        if (nextCount === 1) return "Warning #1 (0 pts)";
+        if (nextCount === 2) return "Penalty #2 (+1 pt)";
+        if (nextCount === 3) return "Penalty #3 (+1 pt)";
+        if (nextCount === 4) return "Penalty #4 (+2 pts)";
+        return "Disqualification (DQ)";
+      };
 
       return (
         <div className="flex flex-col h-full bg-slate-950 p-2 sm:p-3 gap-2 select-none">
@@ -1487,6 +1555,9 @@
                     <span className="text-[10px] font-mono px-1.5 py-0.2 bg-slate-800 text-slate-300 rounded">
                       Cautions: {homeCautions}
                     </span>
+                    <span className="text-[10px] font-mono px-1.5 py-0.2 bg-amber-950/70 border border-amber-800 text-amber-300 rounded font-semibold">
+                      Stall: {homeStalls}
+                    </span>
                   </div>
                   <select
                     value={homeWrestler}
@@ -1579,6 +1650,9 @@
                     </span>
                     <span className="text-[10px] font-mono px-1.5 py-0.2 bg-slate-800 text-slate-300 rounded">
                       Cautions: {awayCautions}
+                    </span>
+                    <span className="text-[10px] font-mono px-1.5 py-0.2 bg-amber-950/70 border border-amber-800 text-amber-300 rounded font-semibold">
+                      Stall: {awayStalls}
                     </span>
                   </div>
 
@@ -1793,26 +1867,52 @@
             </div>
           )}
 
-          {/* PENALTY & CAUTION SELECTION MODAL */}
+          {/* PENALTY, CAUTION, & STALLING MODAL */}
           {penaltyTarget && (
             <div className="fixed inset-0 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-              <div className="bg-slate-900 border border-amber-500/40 rounded-2xl max-w-sm w-full p-5 text-center shadow-2xl space-y-4">
-                <div className="text-3xl mb-1">⚠️</div>
-                <h3 className="text-lg font-black uppercase text-white tracking-wide">
+              <div className="bg-slate-900 border border-amber-500/40 rounded-2xl max-w-sm w-full p-5 text-center shadow-2xl space-y-3">
+                <div className="text-3xl mb-0.5">⚠️</div>
+                <h3 className="text-base font-black uppercase text-white tracking-wide">
                   Infraction on {penaltyTarget === "home" ? `Red (${awayWrestler})` : `Green (${homeWrestler})`}
                 </h3>
-                <p className="text-xs text-slate-400">
-                  Select the penalty or caution infraction committed:
+                <p className="text-[11px] text-slate-400">
+                  Select the penalty, caution, or stalling infraction committed:
                 </p>
 
                 <div className="grid grid-cols-1 gap-2 text-left">
+                  {/* Stalling Offense with Folkstyle rules */}
+                  <button
+                    onClick={() => handleStallingPenalty(penaltyTarget === "home" ? "away" : "home")}
+                    className="p-3 bg-amber-950/40 border border-amber-600/70 hover:bg-amber-600 hover:text-black rounded-xl font-bold text-xs flex justify-between items-center transition"
+                  >
+                    <div>
+                      <div className="font-extrabold flex items-center gap-1.5">
+                        <span>Stalling</span>
+                        <span className="text-[10px] bg-amber-500 text-black px-1.5 py-0.2 rounded font-black uppercase">Folkstyle</span>
+                      </div>
+                      <div className="text-[10px] opacity-80 font-normal mt-0.5">
+                        Current: {penaltyTarget === "home" ? awayStalls : homeStalls} • Next: {getNextStallLabel(penaltyTarget === "home" ? "away" : "home")}
+                      </div>
+                    </div>
+                    <span className="font-mono font-black text-sm">
+                      {((penaltyTarget === "home" ? awayStalls : homeStalls) + 1) === 1
+                        ? "0 PTS"
+                        : ((penaltyTarget === "home" ? awayStalls : homeStalls) + 1) <= 3
+                        ? "+1 PT"
+                        : ((penaltyTarget === "home" ? awayStalls : homeStalls) + 1) === 4
+                        ? "+2 PTS"
+                        : "DQ"}
+                    </span>
+                  </button>
+
+                  {/* False Start / Caution */}
                   <button
                     onClick={() => handleCautionPenalty(penaltyTarget === "home" ? "away" : "home")}
                     className="p-3 bg-slate-800 hover:bg-amber-600 hover:text-black rounded-xl font-bold text-xs flex justify-between items-center transition border border-slate-700"
                   >
                     <div>
                       <div className="font-bold">False Start / Caution</div>
-                      <div className="text-[10px] opacity-75 font-normal">
+                      <div className="text-[10px] opacity-75 font-normal mt-0.5">
                         Count: {(penaltyTarget === "home" ? awayCautions : homeCautions) + 1} • {((penaltyTarget === "home" ? awayCautions : homeCautions) + 1) <= 2 ? "Warning (0 pts)" : "+1 Penalty Point"}
                       </div>
                     </div>
@@ -1884,7 +1984,7 @@
                       Dual Team Points to award:{" "}
                       <strong className="text-blue-400 font-bold text-sm">
                         {homeScore >= awayScore
-                          ? finishType === "Fall" ? 6 : finishType === "Tech Fall" ? 5 : finishType === "Major Decision" ? 4 : 3
+                          ? (finishType === "Fall" || finishType.includes("Disqualification")) ? 6 : finishType === "Tech Fall" ? 5 : finishType === "Major Decision" ? 4 : 3
                           : 0} pts
                       </strong>
                     </span>
@@ -1894,7 +1994,7 @@
                       Tournament Advancement + Bonus:{" "}
                       <strong className="text-purple-400 font-bold text-sm">
                         {homeScore >= awayScore
-                          ? finishType === "Fall" ? 4 : finishType === "Tech Fall" ? 3.5 : finishType === "Major Decision" ? 3 : 2
+                          ? (finishType === "Fall" || finishType.includes("Disqualification")) ? 4 : finishType === "Tech Fall" ? 3.5 : finishType === "Major Decision" ? 3 : 2
                           : 0} pts
                       </strong>
                     </span>
@@ -2068,7 +2168,7 @@
                 </div>
               ) : (
                 history.map((event, idx) => {
-                  const isPenalty = event.code === "PEN";
+                  const isPenalty = event.code === "PEN" || event.code.startsWith("STALL");
                   const isCaution = event.code === "CAUTION";
                   const isSys = event.side === "SYS";
                   return (
@@ -2102,7 +2202,12 @@
                                 Caution
                               </span>
                             )}
-                            {isPenalty && (
+                            {event.code.startsWith("STALL") && (
+                              <span className="text-amber-400 text-[10px] uppercase px-1 bg-amber-950 border border-amber-700 rounded">
+                                Stalling
+                              </span>
+                            )}
+                            {event.code === "PEN" && (
                               <span className="text-rose-400 text-[10px] uppercase px-1 bg-rose-950 border border-rose-700 rounded">
                                 Penalty Point
                               </span>
@@ -2158,7 +2263,7 @@
         const isHomeWinner = formData.winner === "home";
         let dualPts = 0;
         if (formData.eventType === "dual" && isHomeWinner) {
-          if (formData.winType === "Fall" || formData.winType === "Forfeit") dualPts = 6;
+          if (formData.winType === "Fall" || formData.winType === "Forfeit" || formData.winType.includes("Disqualification")) dualPts = 6;
           else if (formData.winType === "Tech Fall") dualPts = 5;
           else if (formData.winType === "Major Decision") dualPts = 4;
           else dualPts = 3;
@@ -2167,7 +2272,7 @@
         let tourneyPts = 0;
         if (formData.eventType === "tournament" && isHomeWinner) {
           tourneyPts = 2;
-          if (formData.winType === "Fall") tourneyPts += 2;
+          if (formData.winType === "Fall" || formData.winType.includes("Disqualification")) tourneyPts += 2;
           else if (formData.winType === "Tech Fall") tourneyPts += 1.5;
           else if (formData.winType === "Major Decision") tourneyPts += 1;
         }
@@ -2299,6 +2404,7 @@
                     <option value="Major Decision">Major Decision</option>
                     <option value="Decision">Decision</option>
                     <option value="Decision (OT)">Decision (OT)</option>
+                    <option value="Disqualification">Disqualification</option>
                     <option value="Forfeit">Forfeit</option>
                   </select>
                 </div>
@@ -2736,7 +2842,7 @@
           if (m.homeWrestler === wrestlerName) {
             if (m.winner === "home") wins++;
             else losses++;
-            if (m.winner === "home" && m.winType === "Fall") falls++;
+            if (m.winner === "home" && (m.winType === "Fall" || m.winType.includes("Disqualification"))) falls++;
             td += m.takedowns || 0;
             e += m.escapes || 0;
             rev += m.reversals || 0;
@@ -2755,7 +2861,7 @@
           } else if (m.eventType === "wrestleoff" && m.opponentName === wrestlerName) {
             if (m.winner === "away") wins++;
             else losses++;
-            if (m.winner === "away" && m.winType === "Fall") falls++;
+            if (m.winner === "away" && (m.winType === "Fall" || m.winType.includes("Disqualification"))) falls++;
             td += m.awayTakedowns || 0;
             e += m.awayEscapes || 0;
             rev += m.awayReversals || 0;
